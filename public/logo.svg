@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 120" width="420" height="120">
+  
+  <g transform="translate(0,0)">
+  <polygon points="60,10 60,60 10,60" fill="#047857"></polygon>
+  <polygon points="60,10 110,60 60,60" fill="#10B981"></polygon>
+  <polygon points="60,60 10,60 60,110" fill="#34D399"></polygon>
+  <polygon points="60,60 110,60 60,110" fill="#34D399"></polygon></g>
+  <text x="140" y="76" font-size="52" letter-spacing="-1" fill="#065F46">Akribis</text>
+</svg>

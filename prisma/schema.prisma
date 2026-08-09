@@ -1,0 +1,412 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/db/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Pharmacy {
+  id          String   @id @default(uuid())
+  name        String
+  address     String?
+  phone       String?
+  /// ICE (Identifiant Commun de l'Entreprise) — Moroccan business registry number.
+  ice         String?
+  orderNumber String?  @map("order_number")
+  logoUrl     String?  @map("logo_url")
+  /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
+  receiptSettings Json? @map("receipt_settings")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users          User[]
+  products       Product[]
+  stockMovements StockMovement[]
+  clients        Client[]
+  sales          Sale[]
+  saleItems      SaleItem[]
+  suppliers      Supplier[]
+  orders         Order[]
+  orderItems     OrderItem[]
+  invoices       Invoice[]
+
+  @@map("pharmacies")
+}
+
+enum UserRole {
+  OWNER     @map("owner")
+  ASSISTANT @map("assistant")
+
+  @@map("user_role")
+}
+
+/// Profile row for a Supabase Auth user. `id` mirrors the `auth.users.id`
+/// UUID of the matching Supabase account; credentials live in Supabase
+/// Auth, not here.
+model User {
+  id         String   @id @default(uuid())
+  pharmacyId String   @map("pharmacy_id")
+  name       String
+  email      String   @unique
+  role       UserRole @default(ASSISTANT)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sales    Sale[]
+  publicationLectures PublicationLecture[]
+
+  @@index([pharmacyId])
+  @@map("users")
+}
+
+model Product {
+  id                String    @id @default(uuid())
+  pharmacyId        String    @map("pharmacy_id")
+  name              String
+  form              String
+  dosage            String?
+  laboratory        String?
+  barcode           String?
+  dci               String?
+  photoUrl          String?   @map("photo_url")
+  /// One of the fixed values in PRODUCT_CATEGORIES (lib/validations/products.ts).
+  category          String?
+  /// Selling price used at the point of sale.
+  price             Decimal   @default(0) @db.Decimal(10, 2)
+  /// Purchase/cost price — used to compute gross margin (price - purchasePrice) on sales reporting.
+  purchasePrice     Decimal?  @map("purchase_price") @db.Decimal(10, 2)
+  /// Prix Public Hospitalier — regulated reference price, separate from `price`.
+  pph               Decimal?  @db.Decimal(10, 2)
+  tvaVente          Decimal?  @map("tva_vente") @db.Decimal(5, 2)
+  tvaAchat          Decimal?  @map("tva_achat") @db.Decimal(5, 2)
+  lowStockThreshold Int       @default(0) @map("low_stock_threshold")
+  quantityInStock   Int       @default(0) @map("quantity_in_stock")
+  nearestExpiryDate DateTime? @map("nearest_expiry_date")
+  remboursable      Boolean   @default(false)
+  /// Only meaningful when `remboursable` is true.
+  baseRemboursement Decimal?  @map("base_remboursement") @db.Decimal(10, 2)
+  posologieEnfant   String?   @map("posologie_enfant")
+  posologieAdulte   String?   @map("posologie_adulte")
+  monographie       String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  pharmacy       Pharmacy        @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  stockMovements StockMovement[]
+  saleItems      SaleItem[]
+  orderItems     OrderItem[]
+
+  @@unique([pharmacyId, barcode])
+  @@index([pharmacyId])
+  @@map("products")
+}
+
+enum StockMovementType {
+  IN
+  OUT
+
+  @@map("stock_movement_type")
+}
+
+model StockMovement {
+  id         String            @id @default(uuid())
+  pharmacyId String            @map("pharmacy_id")
+  productId  String            @map("product_id")
+  type       StockMovementType
+  quantity   Int
+  reason     String?
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@index([pharmacyId])
+  @@index([productId])
+  @@map("stock_movements")
+}
+
+model Client {
+  id         String   @id @default(uuid())
+  pharmacyId String   @map("pharmacy_id")
+  name       String
+  phone      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sales    Sale[]
+
+  @@index([pharmacyId])
+  @@map("clients")
+}
+
+enum PaymentMethod {
+  CASH @map("cash")
+  CARD @map("card")
+
+  @@map("payment_method")
+}
+
+model Sale {
+  id            String        @id @default(uuid())
+  pharmacyId    String        @map("pharmacy_id")
+  clientId      String?       @map("client_id")
+  userId        String?       @map("user_id")
+  paymentMethod PaymentMethod @default(CASH) @map("payment_method")
+  totalAmount   Decimal       @default(0) @map("total_amount") @db.Decimal(10, 2)
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  /// Set once the sale has been billed. A sale belongs to at most one
+  /// invoice, which is what stops the same sale being invoiced twice.
+  invoiceId String? @map("invoice_id")
+
+  pharmacy Pharmacy   @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client   Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  user     User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items    SaleItem[]
+  invoice  Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([pharmacyId])
+  @@index([clientId])
+  @@index([userId])
+  @@index([invoiceId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id         String  @id @default(uuid())
+  pharmacyId String  @map("pharmacy_id")
+  saleId     String  @map("sale_id")
+  productId  String  @map("product_id")
+  quantity   Int
+  unitPrice  Decimal @map("unit_price") @db.Decimal(10, 2)
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@index([pharmacyId])
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+model Supplier {
+  id         String   @id @default(uuid())
+  pharmacyId String   @map("pharmacy_id")
+  name       String
+  phone      String?
+  email      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  orders   Order[]
+
+  @@index([pharmacyId])
+  @@map("suppliers")
+}
+
+enum OrderStatus {
+  PENDING
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+model Order {
+  id         String      @id @default(uuid())
+  pharmacyId String      @map("pharmacy_id")
+  supplierId String      @map("supplier_id")
+  status     OrderStatus @default(PENDING)
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  supplier Supplier    @relation(fields: [supplierId], references: [id])
+  items    OrderItem[]
+
+  @@index([pharmacyId])
+  @@index([supplierId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id               String  @id @default(uuid())
+  pharmacyId       String  @map("pharmacy_id")
+  orderId          String  @map("order_id")
+  productId        String  @map("product_id")
+  quantity         Int
+  /// Cumulative quantity received so far across one or more receptions.
+  receivedQuantity Int     @default(0) @map("received_quantity")
+  unitPrice        Decimal @map("unit_price") @db.Decimal(10, 2)
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@index([pharmacyId])
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+/// Editorial feed published by the Akribis team itself — deliberately NOT
+/// scoped to a pharmacy: every pharmacy sees the same publications. Only
+/// the read-state (PublicationLecture) is per user.
+enum PublicationType {
+  NOUVEAUTE     @map("nouveaute")
+  ALERTE        @map("alerte")
+  MAINTENANCE   @map("maintenance")
+  ANNONCE_SUITE @map("annonce_suite")
+
+  @@map("publication_type")
+}
+
+enum NiveauUrgence {
+  FAIBLE  @map("faible")
+  MOYENNE @map("moyenne")
+  ELEVEE  @map("elevee")
+
+  @@map("niveau_urgence")
+}
+
+enum OutilAkribis {
+  INTELLIGENCE @map("intelligence")
+  LABO         @map("labo")
+  MEDICAL      @map("medical")
+  SUITE        @map("suite")
+
+  @@map("outil_akribis")
+}
+
+model Publication {
+  id      String          @id @default(uuid())
+  titre   String
+  contenu String
+  type    PublicationType
+  /// Only meaningful when `type` is ALERTE — drives the badge colour.
+  niveauUrgence   NiveauUrgence? @map("niveau_urgence")
+  /// Only meaningful when `type` is ANNONCE_SUITE — which companion product the announcement is about.
+  outilAssocie    OutilAkribis?  @map("outil_associe")
+  imageUrl        String?        @map("image_url")
+  datePublication DateTime       @default(now()) @map("date_publication")
+  auteur          String         @default("Équipe Akribis")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  lectures PublicationLecture[]
+
+  @@index([datePublication])
+  @@map("publications")
+}
+
+/// One row per (user, publication) once the user has seen it. Absence of a
+/// row is what makes a publication "unread" — no boolean to keep in sync.
+model PublicationLecture {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  publicationId String   @map("publication_id")
+  luLe          DateTime @default(now()) @map("lu_le")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publication Publication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, publicationId])
+  @@index([userId])
+  @@index([publicationId])
+  @@map("publication_lectures")
+}
+
+
+enum InvoiceStatus {
+  ISSUED    @map("issued")
+  CANCELLED @map("cancelled")
+
+  @@map("invoice_status")
+}
+
+/// Per-pharmacy, per-year invoice sequence. Incremented with a single
+/// atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`, which takes a
+/// row lock and therefore serialises concurrent invoice creations —
+/// reading a MAX() and writing back in application code would race and
+/// hand two invoices the same number.
+model InvoiceCounter {
+  pharmacyId   String @map("pharmacy_id")
+  year         Int
+  lastSequence Int    @default(0) @map("last_sequence")
+
+  @@id([pharmacyId, year])
+  @@map("invoice_counters")
+}
+
+/// A legal document: every field a printed invoice shows is snapshotted
+/// here at issue time rather than joined at render time. Editing the
+/// pharmacy's address, renaming a client or deleting a product must never
+/// retroactively change an invoice that has already been handed out.
+model Invoice {
+  id         String        @id @default(uuid())
+  pharmacyId String        @map("pharmacy_id")
+  /// Display number, e.g. "FACT-2026-0001".
+  number     String
+  year       Int
+  sequence   Int
+  status     InvoiceStatus @default(ISSUED)
+  issuedAt   DateTime      @default(now()) @map("issued_at")
+
+  pharmacyName    String  @map("pharmacy_name")
+  pharmacyAddress String? @map("pharmacy_address")
+  pharmacyPhone   String? @map("pharmacy_phone")
+  pharmacyIce     String? @map("pharmacy_ice")
+
+  /// Kept as a plain snapshot alongside the id: the same invoice format
+  /// serves individuals, insurers and companies, so no client type here.
+  clientId   String? @map("client_id")
+  clientName String? @map("client_name")
+
+  totalHt  Decimal @map("total_ht") @db.Decimal(12, 2)
+  totalTva Decimal @map("total_tva") @db.Decimal(12, 2)
+  totalTtc Decimal @map("total_ttc") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy      @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  lines    InvoiceLine[]
+  /// The sales this invoice bills — one invoice may group several.
+  sales    Sale[]
+
+  @@unique([pharmacyId, number])
+  @@unique([pharmacyId, year, sequence])
+  @@index([pharmacyId, issuedAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id        String  @id @default(uuid())
+  invoiceId String  @map("invoice_id")
+  /// Nullable on purpose: the product may be deleted later; `designation`
+  /// is the snapshot that keeps the invoice readable regardless.
+  productId   String? @map("product_id")
+  designation String
+  quantity    Int
+  unitPriceHt Decimal @map("unit_price_ht") @db.Decimal(10, 2)
+  /// VAT percentage applied to this line, snapshotted from the product.
+  tvaRate  Decimal @map("tva_rate") @db.Decimal(5, 2)
+  totalHt  Decimal @map("total_ht") @db.Decimal(12, 2)
+  totalTva Decimal @map("total_tva") @db.Decimal(12, 2)
+  totalTtc Decimal @map("total_ttc") @db.Decimal(12, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}

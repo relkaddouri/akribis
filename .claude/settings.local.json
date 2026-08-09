@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(npx --yes create-next-app@latest akribis --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --use-npm --no-turbopack)",
+      "Bash(rm -rf akribis)",
+      "Bash(npx --yes create-next-app@15 akribis --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --use-npm --no-turbopack)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(npx --yes shadcn@latest init -d -b neutral)",
+      "Bash(npx --yes shadcn@latest init --help)",
+      "Bash(npx --yes shadcn@latest init --preset)",
+      "Bash(npx --yes shadcn@latest --version)",
+      "Bash(npm view *)",
+      "Bash(npx --yes shadcn@latest init -t next -b radix -p nova -y)",
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(cd /Users/relkaddouri/Documents/Personnal_Projects/Pharmacie *)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(command -v psql)",
+      "Bash(DATABASE_URL=\"postgres://postgres:postgres@localhost:51214/template1?sslmode=disable\" npx prisma migrate dev --name init)",
+      "Bash(npx shadcn@latest add input label card alert)",
+      "Bash(DATABASE_URL=\"postgres://postgres:postgres@localhost:51214/template1?sslmode=disable\" npx prisma migrate dev --name remove_password_hash)",
+      "Bash(DATABASE_URL=\"postgres://postgres:postgres@localhost:51214/template1?sslmode=disable\" npx prisma migrate reset --force)",
+      "Bash(node -e \"console.log\\(Object.keys\\(require\\('/Users/relkaddouri/Documents/Personnal_Projects/Pharmacie/node_modules/@supabase/ssr/dist/main/index.js'\\)\\)\\)\")",
+      "Bash(git rm *)",
+      "Bash(npx shadcn@latest add dialog table badge select)",
+      "Bash(lsof -ti:3000)",
+      "Bash(xargs -r kill -9)",
+      "Bash(nslookup -query=AAAA db.mgsexlaklelutwhmumof.supabase.co)",
+      "Bash(curl -sS -m 5 -6 -o /dev/null -w \"ipv6 http_code: %{http_code}\\\\n\" https://mgsexlaklelutwhmumof.supabase.co/)",
+      "Bash(mkdir -p /Users/relkaddouri/Documents/Personnal_Projects/Pharmacie/components/features/orders *)"
+    ]
+  }
+}
