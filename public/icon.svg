@@ -1,7 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
-
-  <polygon points="60,10 60,60 10,60" fill="#047857"></polygon>
-  <polygon points="60,10 110,60 60,60" fill="#10B981"></polygon>
-  <polygon points="60,60 10,60 60,110" fill="#34D399"></polygon>
-  <polygon points="60,60 110,60 60,110" fill="#34D399"></polygon>
+<svg width="87" height="87" viewBox="0 0 87 87" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M60 26C60 11.6406 48.3594 0 34 0H33V54H40C51.0457 54 60 45.0457 60 34V26Z" fill="url(#paint0_linear_1707_2)"/>
+<path d="M61 60C75.3594 60 87 48.3594 87 34V33L33 33V40C33 51.0457 41.9543 60 53 60H61Z" fill="url(#paint1_linear_1707_2)"/>
+<path d="M33 21C33 39.2254 18.2254 54 0 54H21C39.2254 54 54 68.7746 54 87V66C54 47.7746 68.7746 33 87 33H66C47.7746 33 33 18.2254 33 0V21Z" fill="#D5FFF3"/>
+<defs>
+<linearGradient id="paint0_linear_1707_2" x1="46.5" y1="0" x2="46.5" y2="54" gradientUnits="userSpaceOnUse">
+<stop stop-color="#059669"/>
+<stop offset="1" stop-color="#6EE7B7"/>
+</linearGradient>
+<linearGradient id="paint1_linear_1707_2" x1="87" y1="46" x2="33" y2="46" gradientUnits="userSpaceOnUse">
+<stop stop-color="#059669"/>
+<stop offset="1" stop-color="#6EE7B7"/>
+</linearGradient>
+</defs>
 </svg>

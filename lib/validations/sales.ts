@@ -8,6 +8,14 @@ export const createSaleSchema = z.object({
       z.object({
         productId: z.string().min(1),
         quantity: z.coerce.number().int("Nombre entier requis").positive("Doit être > 0"),
+        /**
+         * Price actually charged, captured when the sale was rung up.
+         *
+         * Optional only for items queued before this field existed; the
+         * till always sends it. Validated, not trusted blindly: a negative
+         * price would turn a sale into a refund.
+         */
+        unitPrice: z.coerce.number().min(0, "Doit être ≥ 0").optional(),
       }),
     )
     .min(1, "Le panier est vide"),
