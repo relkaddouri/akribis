@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Truck } from "lucide-react";
 import type { SupplierModel } from "@/lib/db/generated/models";
@@ -38,6 +39,7 @@ const columns: DataTableColumn<SupplierModel>[] = [
 ];
 
 export function SuppliersView() {
+  const router = useRouter();
   const [formOpen, setFormOpen] = useState(false);
 
   const suppliersQuery = useQuery({
@@ -50,7 +52,7 @@ export function SuppliersView() {
       <DashboardHeader
         title="Fournisseurs"
         icon={<Truck />}
-        backHref="/dashboard/commandes"
+        backHref="/commandes"
         backLabel="Commandes"
         actions={<Button onClick={() => setFormOpen(true)}>Ajouter un fournisseur</Button>}
       />
@@ -62,6 +64,8 @@ export function SuppliersView() {
         isLoading={suppliersQuery.isLoading}
         searchPlaceholder="Rechercher par nom, téléphone ou e-mail..."
         searchFields={(s) => [s.name, s.phone, s.email]}
+        selectable={false}
+        onRowClick={(s) => router.push(`/fournisseurs/${s.id}`)}
         emptyTitle="Aucun fournisseur"
         emptyDescription="Ajoutez votre premier fournisseur pour commencer."
       />

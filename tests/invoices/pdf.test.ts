@@ -83,6 +83,33 @@ describe("renderInvoicePdf", () => {
     expect(bytes.byteLength).toBeGreaterThan(2000);
   });
 
+  it("renders amounts of 1000 and above", async () => {
+    // Regression guard: fr-FR groups thousands with U+202F, a narrow
+    // no-break space WinAnsi cannot encode. Every invoice over 999 threw
+    // until the shared normaliser handled it.
+    const bytes = await renderInvoicePdf(
+      invoice({
+        totalHt: 12500,
+        totalTva: 2500,
+        totalTtc: 15000,
+        lines: [
+          {
+            id: "l1",
+            designation: "Commande en gros",
+            quantity: 100,
+            unitPriceHt: 125,
+            tvaRate: 20,
+            totalHt: 12500,
+            totalTva: 2500,
+            totalTtc: 15000,
+          },
+        ],
+      }),
+    );
+
+    expect(bytes.byteLength).toBeGreaterThan(1000);
+  });
+
   it("still renders a cancelled invoice", async () => {
     const bytes = await renderInvoicePdf(invoice({ status: "cancelled" }));
     expect(bytes.byteLength).toBeGreaterThan(1000);

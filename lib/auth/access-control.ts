@@ -6,6 +6,9 @@ export const DEFAULT_AUTHENTICATED_PATH = "/dashboard";
 export const SETTINGS_PATH = "/parametres";
 export const NEWS_PATH = "/actualites";
 export const INVOICES_PATH = "/factures";
+export const SALES_PATH = "/ventes";
+export const REMINDERS_PATH = "/rappels";
+export const ORDERS_PATH = "/commandes";
 export const FORGOT_PASSWORD_PATH = "/mot-de-passe-oublie";
 /**
  * Deliberately NOT in GUEST_ONLY_PATHS below: completing a password
@@ -20,7 +23,15 @@ export const RESET_PASSWORD_PATH = "/reinitialiser-mot-de-passe";
  * readable by owner and assistant alike, so it's protected but not
  * owner-only.
  */
-export const PROTECTED_PREFIXES = ["/dashboard", SETTINGS_PATH, NEWS_PATH, INVOICES_PATH] as const;
+export const PROTECTED_PREFIXES = [
+  "/dashboard",
+  SETTINGS_PATH,
+  NEWS_PATH,
+  INVOICES_PATH,
+  SALES_PATH,
+  REMINDERS_PATH,
+  ORDERS_PATH,
+] as const;
 
 /** Pages only meant for signed-out visitors (login, signup). */
 const GUEST_ONLY_PATHS = [LOGIN_PATH, SIGNUP_PATH] as const;

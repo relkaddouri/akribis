@@ -10,6 +10,10 @@ function optionalTrimmed() {
 
 export const pharmacyInfoSchema = z.object({
   name: z.string().trim().min(1, "Nom requis"),
+  /// Dirhams that earn one loyalty point. 0 disables the programme.
+  loyaltyRate: z.coerce
+    .number({ message: "Taux invalide" })
+    .min(0, "Le taux ne peut pas être négatif"),
   address: optionalTrimmed(),
   phone: optionalTrimmed(),
   ice: optionalTrimmed(),

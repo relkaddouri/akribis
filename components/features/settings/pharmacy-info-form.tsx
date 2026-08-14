@@ -51,6 +51,21 @@ export function PharmacyInfoForm({ pharmacy }: { pharmacy: PharmacySettings }) {
           <Label htmlFor="orderNumber">Numéro d&apos;ordre</Label>
           <Input id="orderNumber" name="orderNumber" defaultValue={pharmacy.orderNumber ?? ""} />
         </div>
+        <div className="space-y-2">
+          <Label htmlFor="loyaltyRate">Taux de fidélité</Label>
+          <Input
+            id="loyaltyRate"
+            name="loyaltyRate"
+            type="number"
+            min={0}
+            step="0.01"
+            defaultValue={pharmacy.loyaltyRate}
+          />
+          <p className="text-xs text-muted-foreground">
+            Dirhams dépensés pour 1 point. Ex. 1 = 1 DH donne 1 point ; 10 = 10 DH donnent 1
+            point. Mettre 0 désactive le programme.
+          </p>
+        </div>
       </div>
 
       {state.error && (

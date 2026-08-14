@@ -23,7 +23,7 @@ export default async function ParametresPage() {
     <div className="space-y-sp-lg">
       <DashboardHeader title="Paramètres" icon={<Settings />} />
 
-      <div className="max-w-2xl space-y-sp-lg">
+      <div className="space-y-sp-lg">
         <Tabs defaultValue="informations">
           <TabsList>
             <TabsTrigger value="informations">Informations</TabsTrigger>
@@ -31,7 +31,7 @@ export default async function ParametresPage() {
             <TabsTrigger value="utilisateurs">Utilisateurs</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="informations">
+          <TabsContent value="informations" className="max-w-2xl">
             <Card>
               <CardHeader>
                 <CardTitle>Informations de la pharmacie</CardTitle>
@@ -45,7 +45,7 @@ export default async function ParametresPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="ticket">
+          <TabsContent value="ticket" className="max-w-5xl">
             <Card>
               <CardHeader>
                 <CardTitle>Paramétrage du ticket de caisse</CardTitle>
@@ -54,12 +54,12 @@ export default async function ParametresPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ReceiptSettingsForm settings={pharmacy.receiptSettings} />
+                <ReceiptSettingsForm settings={pharmacy.receiptSettings} pharmacy={pharmacy} />
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="utilisateurs" className="space-y-sp-lg">
+          <TabsContent value="utilisateurs" className="max-w-2xl space-y-sp-lg">
             <Card>
               <CardHeader>
                 <CardTitle>Inviter un assistant</CardTitle>

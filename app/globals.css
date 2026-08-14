@@ -191,3 +191,44 @@
     @apply font-heading font-semibold;
   }
 }
+
+/**
+ * Printing.
+ *
+ * `window.print()` prints the whole document, so without this the sidebar,
+ * the page chrome and the surrounding padding all ended up on the paper
+ * next to the receipt. Rather than hunting for every element to hide, the
+ * rule inverts: nothing is visible except the subtree marked
+ * `data-print-area` (the receipt document), which is then promoted to the
+ * top-left of the sheet.
+ *
+ * `visibility` rather than `display` on purpose — collapsing ancestors
+ * with `display: none` would take the receipt down with them.
+ */
+@media print {
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+
+  body * {
+    visibility: hidden;
+    box-shadow: none !important;
+  }
+
+  [data-print-area],
+  [data-print-area] * {
+    visibility: visible;
+  }
+
+  [data-print-area] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+}

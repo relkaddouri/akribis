@@ -1,81 +1,23 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { InvoiceDetail } from "@/lib/server/invoices";
 import { formatMad, summariseTvaByRate } from "@/lib/invoices/totals";
+import {
+  A4,
+  fit,
+  MARGIN,
+  MUTED,
+  rule,
+  RULE,
+  text,
+  textRight,
+  type PdfContext,
+} from "@/lib/pdf/document";
 
 /**
- * Renders an invoice to a real PDF with pdf-lib — a pure-JS library with
- * no native bindings and no filesystem access, which is what makes it
- * safe to run inside a Next route handler (pdfkit needs its .afm font
- * files on disk and breaks once bundled).
+ * Renders an invoice to a real PDF. The drawing primitives live in
+ * lib/pdf/document.ts, shared with the purchase order so both documents
+ * keep the same typography and margins.
  */
-
-const A4 = { width: 595.28, height: 841.89 };
-const MARGIN = 48;
-const INK = rgb(0.07, 0.09, 0.15);
-const MUTED = rgb(0.42, 0.45, 0.5);
-const RULE = rgb(0.85, 0.87, 0.9);
-
-/**
- * pdf-lib's standard fonts are WinAnsi-encoded, which covers French
- * accents but not typographic extras like the narrow no-break space or
- * "…". Any character outside the encoding throws at draw time, so text is
- * normalised before it ever reaches the page.
- */
-function toWinAnsi(value: string): string {
-  return value
-    .replace(/ | /g, " ")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/…/g, "...")
-    .replace(/[–—−]/g, "-");
-}
-
-type Ctx = { page: PDFPage; font: PDFFont; bold: PDFFont };
-
-function text(
-  ctx: Ctx,
-  value: string,
-  x: number,
-  y: number,
-  options: { size?: number; bold?: boolean; color?: ReturnType<typeof rgb> } = {},
-) {
-  const { size = 10, bold = false, color = INK } = options;
-  ctx.page.drawText(toWinAnsi(value), { x, y, size, font: bold ? ctx.bold : ctx.font, color });
-}
-
-/** Right-aligns within a column, which is what makes money columns readable. */
-function textRight(
-  ctx: Ctx,
-  value: string,
-  right: number,
-  y: number,
-  options: { size?: number; bold?: boolean; color?: ReturnType<typeof rgb> } = {},
-) {
-  const { size = 10, bold = false } = options;
-  const normalised = toWinAnsi(value);
-  const width = (bold ? ctx.bold : ctx.font).widthOfTextAtSize(normalised, size);
-  text(ctx, value, right - width, y, options);
-}
-
-/** Truncates with an ellipsis so a long product name can't run into the next column. */
-function fit(ctx: Ctx, value: string, maxWidth: number, size: number): string {
-  const normalised = toWinAnsi(value);
-  if (ctx.font.widthOfTextAtSize(normalised, size) <= maxWidth) return normalised;
-  let cut = normalised;
-  while (cut.length > 1 && ctx.font.widthOfTextAtSize(`${cut}...`, size) > maxWidth) {
-    cut = cut.slice(0, -1);
-  }
-  return `${cut}...`;
-}
-
-function rule(ctx: Ctx, y: number) {
-  ctx.page.drawLine({
-    start: { x: MARGIN, y },
-    end: { x: A4.width - MARGIN, y },
-    thickness: 0.7,
-    color: RULE,
-  });
-}
 
 export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -85,7 +27,7 @@ export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Arr
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   let page = doc.addPage([A4.width, A4.height]);
-  let ctx: Ctx = { page, font, bold };
+  let ctx: PdfContext = { page, font, bold };
 
   const right = A4.width - MARGIN;
   let y = A4.height - MARGIN;

@@ -34,6 +34,9 @@ export const orderFormSchema = z.object({
       }),
     )
     .min(1, "La commande doit contenir au moins un produit"),
+  /// Supplier credits the pharmacist chose to apply to this order.
+  /// Optional: keeping a credit for a later order is a legitimate choice.
+  creditIds: z.array(z.string().min(1)).optional(),
 });
 
 export type OrderFormInput = z.input<typeof orderFormSchema>;

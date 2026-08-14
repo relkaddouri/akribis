@@ -22,7 +22,7 @@ type Shortcut = {
 const SHORTCUTS: Shortcut[] = [
   { label: "Nouvelle vente", icon: ShoppingCart, href: "/dashboard/pos" },
   { label: "Ajouter un produit", icon: PackagePlus, href: "/dashboard/stock/produits/nouveau" },
-  { label: "Nouvelle commande", icon: ClipboardList, href: "/dashboard/commandes/nouvelle" },
+  { label: "Nouvelle commande", icon: ClipboardList, href: "/commandes/nouvelle" },
   { label: "Ajouter un client", icon: UserPlus, href: "/dashboard/clients" },
   // The Inventaire module isn't built yet — it's the disabled sidebar item.
   { label: "Démarrer un inventaire", icon: Boxes, href: null },

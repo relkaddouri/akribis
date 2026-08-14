@@ -16,6 +16,8 @@ import {
   LifeBuoy,
   type LucideIcon,
   Package,
+  BellRing,
+  Receipt,
   Rss,
   Settings,
   ShoppingCart,
@@ -24,13 +26,14 @@ import {
 import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/auth/roles";
 import { ThemeToggle } from "@/components/features/dashboard/theme-toggle";
+import { GlobalSearch } from "@/components/features/dashboard/global-search";
 import { SIDEBAR_COLLAPSED_COOKIE } from "@/components/features/dashboard/sidebar-cookie";
 import {
   AKRIBIS_TOOLS,
   SIDEBAR_TOOL_ORDER,
   type AkribisTool,
 } from "@/components/features/dashboard/akribis-tools";
-import { NEWS_PATH } from "@/lib/auth/access-control";
+import { NEWS_PATH, REMINDERS_PATH } from "@/lib/auth/access-control";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 type NavItem = {
@@ -43,8 +46,9 @@ const MENU_ITEMS: NavItem[] = [
   { label: "Tableau de bord", href: "/dashboard", icon: LayoutDashboard },
   { label: "Stock", href: "/dashboard/stock", icon: Package },
   { label: "Caisse", href: "/dashboard/pos", icon: ShoppingCart },
+  { label: "Ventes", href: "/ventes", icon: Receipt },
   { label: "Clients", href: "/dashboard/clients", icon: Users },
-  { label: "Commandes", href: "/dashboard/commandes", icon: ClipboardList },
+  { label: "Commandes", href: "/commandes", icon: ClipboardList },
   { label: "Factures", href: "/factures", icon: FileText },
 ];
 
@@ -118,6 +122,58 @@ function SidebarLink({
   );
 }
 
+/** A nav item carrying a count badge, e.g. reminders due today. */
+function CountedSidebarLink({
+  href,
+  label,
+  icon: Icon,
+  count,
+  active,
+  collapsed,
+}: {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  count: number;
+  active: boolean;
+  collapsed: boolean;
+}) {
+  return (
+    <MaybeTooltip collapsed={collapsed} label={label}>
+      <Link
+        href={href}
+        aria-label={collapsed ? label : undefined}
+        className={cn(
+          itemBaseClass,
+          collapsed ? "justify-center px-0" : "px-sp-sm",
+          active
+            ? "bg-muted text-foreground"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        )}
+      >
+        <span className="relative flex shrink-0 items-center justify-center">
+          <Icon className="size-4" strokeWidth={1.75} />
+          {/* Collapsed, the number has nowhere to go — a dot still says
+              "something needs attention". */}
+          {collapsed && count > 0 && (
+            <span className="absolute -top-1 -right-1 size-2 rounded-full bg-destructive ring-2 ring-card" />
+          )}
+        </span>
+        {!collapsed && (
+          <>
+            <span className="flex-1 text-left">{label}</span>
+            {count > 0 && (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-sp-xs text-[11px] font-semibold text-white">
+                {count}
+              </span>
+            )}
+          </>
+        )}
+      </Link>
+    </MaybeTooltip>
+  );
+}
+
 function SidebarPlaceholderItem({
   label,
   icon: Icon,
@@ -186,17 +242,19 @@ export function DashboardSidebar({
   role,
   defaultCollapsed = false,
   unreadNewsCount = 0,
+  dueRemindersCount = 0,
 }: {
   role: Role;
   defaultCollapsed?: boolean;
-  /** Unread "Akribis actualités" publications; the feed isn't built yet, so this stays 0 until it is. */
+  /** Unread "Akribis actualités" publications. */
   unreadNewsCount?: number;
+  /** Reminders due today or already late — the ones needing a call now. */
+  dueRemindersCount?: number;
 }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
-  function toggleCollapsed() {
-    const next = !collapsed;
+  function setCollapsedAndPersist(next: boolean) {
     setCollapsed(next);
     // Persisted as a cookie rather than localStorage so the layout can
     // read it server-side and render the right width on first paint —
@@ -205,11 +263,15 @@ export function DashboardSidebar({
     document.cookie = `${SIDEBAR_COLLAPSED_COOKIE}=${next ? "1" : "0"}; path=/; max-age=31536000; SameSite=Lax`;
   }
 
+  function toggleCollapsed() {
+    setCollapsedAndPersist(!collapsed);
+  }
+
   return (
     <TooltipProvider delayDuration={200}>
       <aside
         className={cn(
-          "flex h-svh shrink-0 flex-col bg-card transition-[width] duration-200 ease-in-out",
+          "flex h-svh shrink-0 flex-col bg-card transition-[width] duration-200 ease-in-out print:hidden",
           collapsed ? "w-16" : "w-64",
         )}
       >
@@ -252,6 +314,10 @@ export function DashboardSidebar({
             </Tooltip>
           </div>
         )}
+
+        <div className="px-sp-sm pb-sp-sm">
+          <GlobalSearch collapsed={collapsed} onExpand={() => setCollapsedAndPersist(false)} />
+        </div>
 
         <div className="px-sp-sm pb-sp-sm">
           <MaybeTooltip collapsed={collapsed} label="Akribis actualités">
@@ -301,6 +367,14 @@ export function DashboardSidebar({
                   collapsed={collapsed}
                 />
               ))}
+              <CountedSidebarLink
+                href={REMINDERS_PATH}
+                label="Rappels"
+                icon={BellRing}
+                count={dueRemindersCount}
+                active={isActivePath(pathname, REMINDERS_PATH)}
+                collapsed={collapsed}
+              />
               <SidebarPlaceholderItem
                 label={INVENTORY_ITEM.label}
                 icon={INVENTORY_ITEM.icon}

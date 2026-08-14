@@ -21,6 +21,9 @@ model Pharmacy {
   logoUrl     String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
   receiptSettings Json? @map("receipt_settings")
+  /// Dirhams that earn one loyalty point. 1 means "1 DH = 1 point";
+  /// raising it makes points scarcer. Never 0 — see lib/clients/account.ts.
+  loyaltyRate Decimal @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -34,6 +37,11 @@ model Pharmacy {
   orders         Order[]
   orderItems     OrderItem[]
   invoices       Invoice[]
+  saleReturns    SaleReturn[]
+  clientTransactions ClientTransaction[]
+  clientReminders    ClientReminder[]
+  deliveries         Delivery[]
+  supplierCredits    SupplierCredit[]
 
   @@map("pharmacies")
 }
@@ -59,6 +67,7 @@ model User {
 
   pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   sales    Sale[]
+  saleReturns         SaleReturn[]
   publicationLectures PublicationLecture[]
 
   @@index([pharmacyId])
@@ -101,6 +110,10 @@ model Product {
   stockMovements StockMovement[]
   saleItems      SaleItem[]
   orderItems     OrderItem[]
+  returnLines    SaleReturnLine[]
+  reminders      ClientReminder[]
+  deliveryItems  DeliveryItem[]
+  creditItems    SupplierCreditItem[]
 
   @@unique([pharmacyId, barcode])
   @@index([pharmacyId])
@@ -136,19 +149,98 @@ model Client {
   pharmacyId String   @map("pharmacy_id")
   name       String
   phone      String?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  /// Running account balance. NEGATIVE means the client owes the pharmacy
+  /// (credit sale), POSITIVE means the pharmacy owes the client.
+  ///
+  /// Denormalised from ClientTransaction and kept in step with it inside
+  /// one database transaction — see recordClientTransaction() in
+  /// lib/server/client-account.ts, the single writer. It must always equal
+  /// the sum of the client's transaction amounts.
+  solde          Decimal @default(0) @db.Decimal(12, 2)
+  pointsFidelite Int     @default(0) @map("points_fidelite")
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  sales    Sale[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy     Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sales        Sale[]
+  transactions ClientTransaction[]
+  reminders    ClientReminder[]
 
   @@index([pharmacyId])
   @@map("clients")
 }
 
+enum ClientTransactionType {
+  VENTE            @map("vente")
+  PAIEMENT_PARTIEL @map("paiement_partiel")
+  AVOIR_RECU       @map("avoir_recu")
+  AJUSTEMENT       @map("ajustement")
+
+  @@map("client_transaction_type")
+}
+
+/// Every movement of a client's balance, in order. The amount is SIGNED
+/// and uses the same convention as Client.solde: negative increases the
+/// debt (a credit sale), positive reduces it (a payment). Summing this
+/// table must reproduce Client.solde exactly.
+model ClientTransaction {
+  id          String                @id @default(uuid())
+  pharmacyId  String                @map("pharmacy_id")
+  clientId    String                @map("client_id")
+  type        ClientTransactionType
+  montant     Decimal               @db.Decimal(12, 2)
+  date        DateTime              @default(now())
+  /// The sale this movement came from, when it came from one.
+  saleId      String?               @map("sale_id")
+  description String?
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client   Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sale     Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, date])
+  @@index([pharmacyId])
+  @@index([saleId])
+  @@map("client_transactions")
+}
+
+enum ReminderStatus {
+  A_FAIRE @map("a_faire")
+  FAIT    @map("fait")
+  ANNULE  @map("annule")
+
+  @@map("reminder_status")
+}
+
+/// A manual call-back note. Deliberately no automated messaging in this
+/// version: the pharmacist phones the client themselves.
+model ClientReminder {
+  id         String         @id @default(uuid())
+  pharmacyId String         @map("pharmacy_id")
+  clientId   String         @map("client_id")
+  productId  String?        @map("product_id")
+  dateRappel DateTime       @map("date_rappel")
+  note       String
+  statut     ReminderStatus @default(A_FAIRE)
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client   Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([pharmacyId, dateRappel])
+  @@index([clientId])
+  @@map("client_reminders")
+}
+
 enum PaymentMethod {
   CASH @map("cash")
   CARD @map("card")
+  /// Sale taken on account — settled later, and only allowed when a
+  /// client is attached, since an anonymous walk-in has nobody to bill.
+  CREDIT @map("credit")
 
   @@map("payment_method")
 }
@@ -166,11 +258,19 @@ model Sale {
   /// invoice, which is what stops the same sale being invoiced twice.
   invoiceId String? @map("invoice_id")
 
+  /// Denormalised from the sale's lines, written in the same transaction
+  /// as every return — mirrors how Order.status works. Stored rather than
+  /// derived so the sales list can filter on it without aggregating every
+  /// line of every sale.
+  returnStatus SaleReturnStatus @default(NONE) @map("return_status")
+
   pharmacy Pharmacy   @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   client   Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
   user     User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   items    SaleItem[]
   invoice  Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  returns  SaleReturn[]
+  clientTransactions ClientTransaction[]
 
   @@index([pharmacyId])
   @@index([clientId])
@@ -186,10 +286,14 @@ model SaleItem {
   productId  String  @map("product_id")
   quantity   Int
   unitPrice  Decimal @map("unit_price") @db.Decimal(10, 2)
+  /// Cumulative quantity returned so far across one or more returns —
+  /// the cap that stops a line being refunded more than it was sold.
+  returnedQuantity Int @default(0) @map("returned_quantity")
 
   pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product  Product  @relation(fields: [productId], references: [id])
+  returnLines SaleReturnLine[]
 
   @@index([pharmacyId])
   @@index([saleId])
@@ -206,18 +310,20 @@ model Supplier {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  pharmacy Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   orders   Order[]
+  credits  SupplierCredit[]
 
   @@index([pharmacyId])
   @@map("suppliers")
 }
 
 enum OrderStatus {
-  PENDING
-  PARTIALLY_RECEIVED
-  RECEIVED
-  CANCELLED
+  BROUILLON           @map("brouillon")
+  ENVOYEE             @map("envoyee")
+  PARTIELLEMENT_RECUE @map("partiellement_recue")
+  RECUE               @map("recue")
+  CLOTUREE            @map("cloturee")
 
   @@map("order_status")
 }
@@ -226,17 +332,173 @@ model Order {
   id         String      @id @default(uuid())
   pharmacyId String      @map("pharmacy_id")
   supplierId String      @map("supplier_id")
-  status     OrderStatus @default(PENDING)
-  createdAt  DateTime    @default(now()) @map("created_at")
+  status     OrderStatus @default(BROUILLON)
+  /// Sequential per pharmacy, allocated atomically — see lib/server/sequences.ts.
+  numero     Int
+  createdAt  DateTime    @default(now()) @map("date_creation")
+  /// Set when the order actually leaves for the supplier; null while draft.
+  dateEnvoi  DateTime?   @map("date_envoi")
   updatedAt  DateTime    @updatedAt @map("updated_at")
 
-  pharmacy Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  supplier Supplier    @relation(fields: [supplierId], references: [id])
-  items    OrderItem[]
+  pharmacy   Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  supplier   Supplier         @relation(fields: [supplierId], references: [id])
+  items      OrderItem[]
+  deliveries Delivery[]
+  credits    SupplierCredit[]
 
+  @@unique([pharmacyId, numero])
   @@index([pharmacyId])
   @@index([supplierId])
   @@map("orders")
+}
+
+/// One physical delivery against an order. An order may receive several,
+/// which is what makes partial receipts first-class rather than a running
+/// total smeared over OrderItem.
+model Delivery {
+  id            String   @id @default(uuid())
+  pharmacyId    String   @map("pharmacy_id")
+  orderId       String   @map("order_id")
+  /// Sequential per pharmacy and independent of the order numbering.
+  numero        Int
+  dateReception DateTime @default(now()) @map("date_reception")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  pharmacy Pharmacy       @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  order    Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items    DeliveryItem[]
+
+  @@unique([pharmacyId, numero])
+  @@index([orderId])
+  @@index([pharmacyId, dateReception])
+  @@map("deliveries")
+}
+
+/// What actually arrived in one delivery — deliberately independent of
+/// OrderItem.quantity, since a supplier may short-ship or over-ship.
+model DeliveryItem {
+  id            String @id @default(uuid())
+  deliveryId    String @map("delivery_id")
+  orderItemId   String @map("order_item_id")
+  productId     String @map("product_id")
+  quantiteRecue Int    @map("quantite_recue")
+
+  delivery  Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@index([deliveryId])
+  @@index([orderItemId])
+  @@index([productId])
+  @@map("delivery_items")
+}
+
+enum SupplierCreditStatus {
+  EMIS @map("emis")
+  RECU @map("recu")
+
+  @@map("supplier_credit_status")
+}
+
+enum SupplierCreditMotif {
+  PRODUIT_ENDOMMAGE @map("produit_endommage")
+  PRODUIT_PERIME    @map("produit_perime")
+  RAPPEL_LOT        @map("rappel_lot")
+  ERREUR_LIVRAISON  @map("erreur_livraison")
+  ERREUR_PRIX       @map("erreur_prix")
+  REMISE            @map("remise")
+  AUTRE             @map("autre")
+
+  @@map("supplier_credit_motif")
+}
+
+enum SupplierCreditCompensation {
+  AVOIR_CREDIT @map("avoir_credit")
+  ESPECES      @map("especes")
+
+  @@map("supplier_credit_compensation")
+}
+
+/// A supplier credit note. ONE document that moves through its own
+/// lifecycle (emis → recu) rather than two tables for the two ends of it:
+/// the same piece of paper is what the pharmacy issues and what the
+/// supplier later honours.
+///
+/// STOCK RULE: the goods leave stock when the credit is ISSUED (`emis`),
+/// never when it is settled (`recu`). Settlement only records how the
+/// supplier compensated — decrementing again there would double-count.
+/// Enforced in lib/server/supplier-credits.ts.
+model SupplierCredit {
+  id         String                      @id @default(uuid())
+  pharmacyId String                      @map("pharmacy_id")
+  supplierId String                      @map("supplier_id")
+  /// The order the claim relates to, when it relates to one.
+  orderId    String?                     @map("order_id")
+  /// Sequential per pharmacy, independent of orders and deliveries.
+  numero     Int
+  statut     SupplierCreditStatus        @default(EMIS)
+  motif      SupplierCreditMotif
+  /// Only meaningful once `statut` is RECU — how the supplier settled.
+  modeCompensation SupplierCreditCompensation? @map("mode_compensation")
+  montant          Decimal                     @db.Decimal(12, 2)
+  /// How much of `montant` is still available to offset a future order.
+  /// Starts equal to `montant` and only ever decreases, as orders consume
+  /// it — this is what stops the same credit being applied twice.
+  montantRestant   Decimal                     @default(0) @map("montant_restant") @db.Decimal(12, 2)
+  dateEmission     DateTime                    @default(now()) @map("date_emission")
+  /// Null until the supplier confirms.
+  dateReception    DateTime?                   @map("date_reception")
+  /// Regulatory traceability: this credit stems from an official lot recall.
+  lieRappelLot     Boolean                     @default(false) @map("lie_rappel_lot")
+  note             String?
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  supplier Supplier             @relation(fields: [supplierId], references: [id])
+  order    Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  items    SupplierCreditItem[]
+
+  @@unique([pharmacyId, numero])
+  @@index([pharmacyId, dateEmission])
+  @@index([supplierId])
+  @@index([orderId])
+  @@map("supplier_credits")
+}
+
+model SupplierCreditItem {
+  id        String  @id @default(uuid())
+  creditId  String  @map("credit_id")
+  productId String  @map("product_id")
+  quantite  Int
+  /// Unit value claimed, snapshotted at issue time.
+  unitPrice Decimal @map("unit_price") @db.Decimal(10, 2)
+
+  credit  SupplierCredit @relation(fields: [creditId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id])
+
+  @@index([creditId])
+  @@index([productId])
+  @@map("supplier_credit_items")
+}
+
+/// Generic per-(pharmacy, scope) sequence for document numbering.
+///
+/// Incremented with one atomic INSERT ... ON CONFLICT DO UPDATE — the same
+/// guarantee InvoiceCounter gives invoices, which keeps its own table so
+/// its established year-based numbering is never disturbed.
+///
+/// Unlike invoices these sequences never reset: an order numbered 412 stays
+/// 412 forever, which is what makes `@@unique([pharmacyId, numero])` on each
+/// document table a meaningful constraint.
+model DocumentCounter {
+  pharmacyId   String @map("pharmacy_id")
+  /// "order" | "delivery" | "supplier_credit"
+  scope        String
+  lastSequence Int    @default(0) @map("last_sequence")
+
+  @@id([pharmacyId, scope])
+  @@map("document_counters")
 }
 
 model OrderItem {
@@ -249,9 +511,10 @@ model OrderItem {
   receivedQuantity Int     @default(0) @map("received_quantity")
   unitPrice        Decimal @map("unit_price") @db.Decimal(10, 2)
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product  Product  @relation(fields: [productId], references: [id])
+  pharmacy      Pharmacy       @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product        @relation(fields: [productId], references: [id])
+  deliveryItems DeliveryItem[]
 
   @@index([pharmacyId])
   @@index([orderId])
@@ -409,4 +672,70 @@ model InvoiceLine {
 
   @@index([invoiceId])
   @@map("invoice_lines")
+}
+
+
+enum SaleReturnStatus {
+  NONE    @map("none")
+  PARTIAL @map("partial")
+  FULL    @map("full")
+
+  @@map("sale_return_status")
+}
+
+/// One recorded return against a sale. Several partial returns may stack
+/// on the same sale; the cumulative quantities are capped by what was
+/// actually sold (see SaleItem.returnedQuantity).
+model SaleReturn {
+  id         String   @id @default(uuid())
+  pharmacyId String   @map("pharmacy_id")
+  saleId     String   @map("sale_id")
+  /// Who processed the return — kept for traceability, nullable so
+  /// deleting a user never erases the return itself.
+  userId     String?  @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  /// Flags a return triggered by an official lot recall, which carries
+  /// regulatory reporting obligations that an ordinary client return
+  /// doesn't.
+  isLotRecall     Boolean @default(false) @map("is_lot_recall")
+  /// Reference of the recall notice (ministry circular, batch number…),
+  /// so a recalled batch can be traced back later.
+  recallReference String? @map("recall_reference")
+  note            String?
+
+  totalRefund Decimal @map("total_refund") @db.Decimal(12, 2)
+
+  pharmacy Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sale     Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  user     User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  lines    SaleReturnLine[]
+
+  @@index([pharmacyId, createdAt])
+  @@index([saleId])
+  @@map("sale_returns")
+}
+
+model SaleReturnLine {
+  id         String @id @default(uuid())
+  returnId   String @map("return_id")
+  saleItemId String @map("sale_item_id")
+  productId  String @map("product_id")
+  quantity   Int
+  /// Snapshot of the price refunded per unit.
+  unitPrice    Decimal @map("unit_price") @db.Decimal(10, 2)
+  refundAmount Decimal @map("refund_amount") @db.Decimal(12, 2)
+  /// Decided per line, per return: false means the goods were destroyed
+  /// rather than put back on the shelf (recalled or unsellable batches),
+  /// so no stock is credited but the movement stays on record.
+  restocked Boolean @default(true)
+
+  saleReturn SaleReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItem   SaleItem   @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id])
+
+  @@index([returnId])
+  @@index([saleItemId])
+  @@index([productId])
+  @@map("sale_return_lines")
 }

@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ArrowLeft, Bell, ChevronDown, LogOut, Search, Settings } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, LogOut, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSyncStatus } from "@/components/features/offline/use-sync-status";
 import { listPendingSyncItems } from "@/lib/offline/sync-queue";
@@ -31,45 +30,6 @@ const SYNC_ITEM_LABELS: Record<SyncOperationType, string> = {
   createProduct: "nouveau produit",
   receiveOrder: "réception de commande",
 };
-
-const SEARCH_PLACEHOLDERS = [
-  'Essayez "Nouvelle vente"...',
-  'Essayez "Doliprane 500mg"...',
-  'Essayez "Ajouter un client"...',
-  'Essayez "Commandes en attente"...',
-];
-
-const PLACEHOLDER_ROTATE_MS = 3500;
-
-function GlobalSearchBar() {
-  const [search, setSearch] = useState("");
-  const [placeholderIndex, setPlaceholderIndex] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(
-      () => setPlaceholderIndex((i) => (i + 1) % SEARCH_PLACEHOLDERS.length),
-      PLACEHOLDER_ROTATE_MS,
-    );
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="flex w-full items-center gap-sp-sm rounded-lg bg-muted/60 px-sp-sm py-sp-xs text-sm text-muted-foreground transition-colors focus-within:bg-muted">
-      <Search className="size-4 shrink-0" strokeWidth={1.75} />
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder={SEARCH_PLACEHOLDERS[placeholderIndex]}
-        aria-label="Recherche globale"
-        className="w-full bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
-      />
-      <kbd className="hidden shrink-0 rounded-md border border-border bg-card px-sp-xs py-sp-xs text-[10px] font-medium text-muted-foreground sm:inline-block">
-        ⌘K
-      </kbd>
-    </div>
-  );
-}
 
 function SyncStatusMenu() {
   const { status, pendingCount } = useSyncStatus();
@@ -208,7 +168,7 @@ export function DashboardHeader({
   backHref?: string;
   /** Names the destination for screen readers, e.g. "Commandes". */
   backLabel?: string;
-  /** Page-specific controls (e.g. a "Nouvelle vente" button) shown next to the search bar. */
+  /** Page-specific controls, e.g. a "Nouvelle commande" button. */
   actions?: React.ReactNode;
   hasUnreadNews?: boolean;
 }) {
@@ -223,13 +183,17 @@ export function DashboardHeader({
        z-30 sits above page content while staying below Radix portals
        (dropdowns/tooltips render at z-50). */
     <div className="sticky top-0 z-30 -mx-sp-lg bg-background px-sp-lg pt-sp-lg print:static print:hidden">
-      {/* Three zones on one row, separated by exactly `gap-sp-md`. The
-          search zone grows but stops at `max-w-md`; previously the wrapper
-          was `flex-1` with no cap while the bar inside it capped itself,
-          so on wide screens the wrapper kept growing around a fixed-width
-          input and opened a dead gap in the middle of the header. */}
+      {/* Two zones on one row, separated by exactly `gap-sp-md`. Global
+          search moved to the sidebar, so the title block now takes the
+          width it used to occupy. */}
       <div className="flex flex-wrap items-center gap-sp-md rounded-xl bg-card px-sp-md py-sp-sm shadow-soft">
-        <div className="flex min-w-0 shrink-0 items-center gap-sp-sm">
+        {/* `basis-48` rather than a max-width. In a wrapping flex row the
+            browser decides line breaks from each item's *base* size before
+            any shrinking happens, so a long title pushed the trailing
+            cluster onto a second row no matter how shrinkable this block
+            was. A small base keeps the row intact, while `flex-1` lets the
+            title spread into the space the search bar has vacated. */}
+        <div className="flex min-w-0 flex-1 basis-48 items-center gap-sp-sm">
           {backHref && (
             <Link
               href={backHref}
@@ -247,14 +211,6 @@ export function DashboardHeader({
             <h1 className="truncate font-heading text-xl font-bold text-foreground">{title}</h1>
             {subtitle && <p className="truncate text-xs text-muted-foreground">{subtitle}</p>}
           </div>
-        </div>
-
-        {/* Sized, not grown. `flex-1` collapses here: the trailing cluster's
-            `ml-auto` consumes all free space before flex-grow is applied,
-            so the field would shrink to its icons. A fixed width with
-            shrink disabled keeps it predictable instead of stretching. */}
-        <div className="order-3 w-full sm:order-none sm:w-96 sm:shrink-0">
-          <GlobalSearchBar />
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-sp-md">

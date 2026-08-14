@@ -16,6 +16,8 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
 import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales";
+import { computeLoyaltyPoints, creditSaleMovement } from "@/lib/clients/account";
+import { addLoyaltyPoints, recordClientTransaction } from "@/lib/server/client-account";
 import type { PaymentMethod } from "@/lib/db/generated/enums";
 
 export type ReceiptLine = {
@@ -133,6 +135,32 @@ export async function createSale(
           reason: `Vente ${sale.id}`,
         },
       });
+    }
+
+    if (client) {
+      // Both of these belong in the sale's own transaction: a sale that
+      // charged the account but failed to record why (or vice versa) would
+      // break the balance/history invariant that lib/server/client-account.ts
+      // guarantees.
+      if (parsed.paymentMethod === "CREDIT") {
+        await recordClientTransaction(tx, user.pharmacyId, {
+          clientId: client.id,
+          type: "vente",
+          montant: creditSaleMovement(totalAmount),
+          saleId: sale.id,
+          description: "Vente à crédit",
+        });
+      }
+
+      const pharmacy = await tx.pharmacy.findUniqueOrThrow({
+        where: { id: user.pharmacyId },
+        select: { loyaltyRate: true },
+      });
+      await addLoyaltyPoints(
+        tx,
+        client.id,
+        computeLoyaltyPoints(totalAmount, Number(pharmacy.loyaltyRate)),
+      );
     }
 
     return {

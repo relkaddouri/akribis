@@ -76,7 +76,7 @@ export function StockAlerts({ products }: { products: ProductForAlerts[] }) {
                       always leads to, so it gets its own shortcut rather
                       than making the user navigate there themselves. */}
                   <Link
-                    href="/dashboard/commandes/nouvelle"
+                    href="/commandes/nouvelle"
                     aria-label={`Créer une commande pour ${alert.productName}`}
                     title="Créer une commande"
                     className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-primary"

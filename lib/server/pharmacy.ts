@@ -9,7 +9,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/client";
-import { requireOwner } from "@/lib/auth/session";
+import { requireOwner, requireUser } from "@/lib/auth/session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   pharmacyInfoSchema,
@@ -30,9 +30,57 @@ export type PharmacySettings = {
   orderNumber: string | null;
   logoUrl: string | null;
   receiptSettings: ReceiptSettings;
+  /** Dirhams per loyalty point; 0 means the programme is off. */
+  loyaltyRate: number;
 };
 
 const LOGO_BUCKET = "pharmacy-logos";
+
+/** Everything the printed receipt shows about the pharmacy itself. */
+export type ReceiptBranding = {
+  pharmacyName: string;
+  address: string | null;
+  phone: string | null;
+  ice: string | null;
+  logoUrl: string | null;
+  showLogo: boolean;
+  legalNotice: string | null;
+  thankYouMessage: string | null;
+};
+
+/**
+ * Read-only branding for the till receipt, gated by requireUser() rather
+ * than requireOwner(): assistants work the counter and their sales must
+ * print the same letterhead. getPharmacySettings() stays owner-only
+ * because it backs the settings *forms*, which assistants may not open.
+ */
+export async function getReceiptBranding(): Promise<ReceiptBranding> {
+  const user = await requireUser();
+  const pharmacy = await prisma.pharmacy.findUniqueOrThrow({
+    where: { id: user.pharmacyId },
+    select: {
+      name: true,
+      address: true,
+      phone: true,
+      ice: true,
+      logoUrl: true,
+      receiptSettings: true,
+      loyaltyRate: true,
+    },
+  });
+
+  const settings = parseReceiptSettings(pharmacy.receiptSettings);
+  return {
+    pharmacyName: pharmacy.name,
+    address: pharmacy.address,
+    phone: pharmacy.phone,
+    ice: pharmacy.ice,
+    logoUrl: pharmacy.logoUrl,
+    showLogo: settings.showLogo,
+    legalNotice: settings.legalNotice,
+    thankYouMessage: settings.thankYouMessage,
+  };
+}
 
 export async function getPharmacySettings(): Promise<PharmacySettings> {
   const owner = await requireOwner();
@@ -49,6 +97,7 @@ export async function getPharmacySettings(): Promise<PharmacySettings> {
     orderNumber: pharmacy.orderNumber,
     logoUrl: pharmacy.logoUrl,
     receiptSettings: parseReceiptSettings(pharmacy.receiptSettings),
+    loyaltyRate: Number(pharmacy.loyaltyRate),
   };
 }
 
@@ -93,6 +142,7 @@ export async function updatePharmacyInfoAction(
     phone: formData.get("phone"),
     ice: formData.get("ice"),
     orderNumber: formData.get("orderNumber"),
+    loyaltyRate: formData.get("loyaltyRate"),
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide" };

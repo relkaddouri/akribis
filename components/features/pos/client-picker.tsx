@@ -1,20 +1,24 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Search, UserPlus, UserRound, X } from "lucide-react";
 import { addClient, listClients } from "@/lib/server/clients";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 const SEARCH_DEBOUNCE_MS = 200;
 
 export type SelectedClient = { id: string; name: string } | null;
 
 /**
- * Optional, collapsed by default: the default POS flow (walk-in sale,
- * no client) must stay exactly as fast as before this existed. Expanding
- * it reveals a search over existing clients or a two-field quick-add
- * that selects the new client immediately.
+ * Inline client selector, sitting at the top of the cart.
+ *
+ * Deliberately not a dialog: a modal steals focus from the scanner and
+ * hides the cart mid-sale. Everything happens in place — search, pick, or
+ * create — so the cashier never leaves the till flow. The current client
+ * stays on screen at all times rather than being something you have to
+ * open a panel to check.
  */
 export function ClientPicker({
   value,
@@ -24,20 +28,30 @@ export function ClientPicker({
   onChange: (client: SelectedClient) => void;
 }) {
   const queryClient = useQueryClient();
-  const [expanded, setExpanded] = useState(false);
-  const [showNewForm, setShowNewForm] = useState(false);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timeout = setTimeout(() => setDebounced(search.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timeout);
   }, [search]);
 
+  // Clicking anywhere else closes the results without touching the cart.
+  useEffect(() => {
+    if (!isOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) setIsOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isOpen]);
+
   const query = useQuery({
     queryKey: ["clients", { search: debounced }],
     queryFn: () => listClients({ search: debounced }),
-    enabled: expanded && debounced.length > 0,
+    enabled: debounced.length > 0,
   });
 
   const addMutation = useMutation({
@@ -50,100 +64,113 @@ export function ClientPicker({
 
   function select(client: SelectedClient) {
     onChange(client);
-    setExpanded(false);
-    setShowNewForm(false);
     setSearch("");
+    setDebounced("");
+    setIsOpen(false);
   }
 
-  function handleNewClientSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    addMutation.mutate({
-      name: String(formData.get("name") ?? ""),
-      phone: String(formData.get("phone") ?? ""),
-    });
-  }
+  const results = query.data ?? [];
+  const typedName = search.trim();
+  // Offered only when nothing matches exactly, so the cashier doesn't
+  // create a duplicate of the client they just found.
+  const canCreate =
+    typedName.length > 0 &&
+    !query.isLoading &&
+    !results.some((client) => client.name.toLowerCase() === typedName.toLowerCase());
 
-  if (!expanded) {
+  if (value) {
     return (
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-muted-foreground">
-          {value ? `Client : ${value.name}` : "Vente sans client"}
-        </span>
-        {value ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => onChange(null)}>
-            Retirer
-          </Button>
-        ) : (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setExpanded(true)}>
-            Associer un client
-          </Button>
-        )}
+      <div className="flex items-center gap-sp-sm rounded-lg bg-accent px-sp-md py-sp-sm">
+        <UserRound className="size-5 shrink-0 text-primary" strokeWidth={1.75} />
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">{value.name}</span>
+        <Button type="button" variant="ghost" size="sm" onClick={() => onChange(null)}>
+          Changer
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Retirer le client"
+          onClick={() => onChange(null)}
+        >
+          <X className="size-4" />
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2 rounded-md border p-3">
-      {showNewForm ? (
-        <form onSubmit={handleNewClientSubmit} className="flex items-end gap-2">
-          <div className="space-y-1">
-            <label className="text-xs" htmlFor="new-client-name">
-              Nom
-            </label>
-            <Input id="new-client-name" name="name" required className="h-8" />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs" htmlFor="new-client-phone">
-              Téléphone
-            </label>
-            <Input id="new-client-phone" name="phone" type="tel" className="h-8" />
-          </div>
-          <Button type="submit" size="sm" disabled={addMutation.isPending}>
-            {addMutation.isPending ? "Ajout..." : "Créer"}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setShowNewForm(false)}>
-            Annuler
-          </Button>
-        </form>
-      ) : (
-        <>
-          <div className="flex items-center gap-2">
-            <Input
-              autoFocus
-              placeholder="Rechercher un client..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="h-8"
-            />
-            <Button type="button" variant="outline" size="sm" onClick={() => setShowNewForm(true)}>
-              + Nouveau client
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setExpanded(false)}>
-              Annuler
-            </Button>
-          </div>
-          {debounced.length > 0 && (
-            <ul className="max-h-48 overflow-auto text-sm">
-              {(query.data ?? []).length === 0 && !query.isLoading ? (
-                <li className="text-muted-foreground px-1 py-1">Aucun client trouvé.</li>
-              ) : (
-                (query.data ?? []).map((client) => (
-                  <li key={client.id}>
-                    <button
-                      type="button"
-                      onClick={() => select({ id: client.id, name: client.name })}
-                      className="hover:bg-accent flex w-full justify-between rounded px-1 py-1 text-left"
-                    >
-                      <span>{client.name}</span>
-                      <span className="text-muted-foreground">{client.phone ?? ""}</span>
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center gap-sp-sm rounded-lg bg-muted/60 px-sp-md py-sp-sm transition-colors focus-within:bg-muted">
+        <Search className="size-5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+        <input
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              // Swallowed so it doesn't reach the POS-wide "clear cart"
+              // shortcut — closing the dropdown is the expected effect here.
+              event.stopPropagation();
+              setIsOpen(false);
+            }
+          }}
+          placeholder="Client de passage — rechercher par nom ou téléphone"
+          aria-label="Rechercher un client"
+          className="h-8 w-full min-w-0 bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        {query.isFetching && (
+          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+        )}
+      </div>
+
+      {isOpen && typedName.length > 0 && (
+        <ul className="absolute z-20 mt-sp-xs max-h-72 w-full overflow-auto rounded-lg bg-popover p-sp-xs shadow-card">
+          {results.map((client) => (
+            <li key={client.id}>
+              <button
+                type="button"
+                onClick={() => select({ id: client.id, name: client.name })}
+                className="flex w-full items-center justify-between gap-sp-md rounded-md px-sp-md py-sp-sm text-left transition-colors hover:bg-accent"
+              >
+                <span className="truncate font-medium text-foreground">{client.name}</span>
+                <span className="shrink-0 text-sm text-muted-foreground">{client.phone ?? ""}</span>
+              </button>
+            </li>
+          ))}
+
+          {canCreate && (
+            <li>
+              <button
+                type="button"
+                disabled={addMutation.isPending}
+                onClick={() => addMutation.mutate({ name: typedName, phone: "" })}
+                className={cn(
+                  "flex w-full items-center gap-sp-sm rounded-md px-sp-md py-sp-sm text-left font-medium text-primary transition-colors hover:bg-accent",
+                  results.length > 0 && "mt-sp-xs border-t pt-sp-sm",
+                )}
+              >
+                <UserPlus className="size-4 shrink-0" strokeWidth={1.75} />
+                {addMutation.isPending
+                  ? "Création..."
+                  : `Créer « ${typedName} » comme nouveau client`}
+              </button>
+            </li>
           )}
-        </>
+
+          {results.length === 0 && !canCreate && (
+            <li className="px-sp-md py-sp-sm text-sm text-muted-foreground">Recherche...</li>
+          )}
+        </ul>
+      )}
+
+      {addMutation.isError && (
+        <p className="mt-sp-xs text-sm text-destructive">
+          {(addMutation.error as Error).message}
+        </p>
       )}
     </div>
   );

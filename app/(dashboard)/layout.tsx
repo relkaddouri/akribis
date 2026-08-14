@@ -6,6 +6,7 @@ import { DashboardUserProvider } from "@/components/providers/dashboard-user-pro
 import { DashboardSidebar } from "@/components/features/dashboard/dashboard-sidebar";
 import { SIDEBAR_COLLAPSED_COOKIE } from "@/components/features/dashboard/sidebar-cookie";
 import { getUnreadPublicationCount } from "@/lib/server/publications";
+import { getDueReminderCount } from "@/lib/server/reminders";
 
 export default async function DashboardLayout({
   children,
@@ -18,7 +19,10 @@ export default async function DashboardLayout({
   // the expanded sidebar on every load for users who collapsed it.
   const cookieStore = await cookies();
   const collapsed = cookieStore.get(SIDEBAR_COLLAPSED_COOKIE)?.value === "1";
-  const unreadNewsCount = await getUnreadPublicationCount();
+  const [unreadNewsCount, dueRemindersCount] = await Promise.all([
+    getUnreadPublicationCount(),
+    getDueReminderCount(),
+  ]);
 
   return (
     <OfflineProvider pharmacyId={user.pharmacyId} userId={user.id}>
@@ -32,13 +36,14 @@ export default async function DashboardLayout({
             descendants (Tailwind's `sr-only` among them): without it they
             resolve against the document, escape the scroll port's
             clipping, and stretch the page so the whole shell scrolls. */}
-        <div className="flex h-svh overflow-hidden">
+        <div className="flex h-svh overflow-hidden print:block print:h-auto print:overflow-visible">
           <DashboardSidebar
             role={user.role}
             defaultCollapsed={collapsed}
             unreadNewsCount={unreadNewsCount}
+            dueRemindersCount={dueRemindersCount}
           />
-          <main className="relative flex-1 overflow-y-auto bg-background">
+          <main className="relative flex-1 overflow-y-auto bg-background print:overflow-visible">
             <div className="px-sp-lg pb-sp-lg">
               <QueryProvider>{children}</QueryProvider>
             </div>

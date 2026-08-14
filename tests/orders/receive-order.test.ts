@@ -13,6 +13,7 @@ const state = vi.hoisted(() => {
     pharmacyId: string;
     supplierId: string;
     status: string;
+    numero: number;
     createdAt: Date;
   };
   type FakeOrderItem = {
@@ -38,11 +39,63 @@ const state = vi.hoisted(() => {
     products: [] as FakeProduct[],
     suppliers: [] as FakeSupplier[],
     stockMovements: [] as Array<{ productId: string; type: string; quantity: number }>,
+    deliveries: [] as Array<{ id: string; orderId: string; numero: number }>,
+    deliveryItems: [] as Array<{
+      deliveryId: string;
+      orderItemId: string;
+      productId: string;
+      quantiteRecue: number;
+    }>,
+    counters: new Map<string, number>(),
   };
 });
 
 function makeTx() {
   return {
+    // Stands in for the atomic INSERT ... ON CONFLICT DO UPDATE that
+    // allocates document numbers; applied synchronously, as Postgres
+    // applies that single statement.
+    $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const sql = strings.join(" ");
+      if (!/INSERT INTO document_counters/i.test(sql)) {
+        throw new Error(`Unexpected raw SQL: ${sql}`);
+      }
+      const [pharmacyId, scope] = values as [string, string];
+      const key = `${pharmacyId}:${scope}`;
+      const next = (state.counters.get(key) ?? 0) + 1;
+      state.counters.set(key, next);
+      return Promise.resolve([{ last_sequence: next }]);
+    },
+    delivery: {
+      create: async ({
+        data,
+      }: {
+        data: { orderId: string; numero: number };
+      }) => {
+        const delivery = {
+          id: `dl${state.deliveries.length + 1}`,
+          orderId: data.orderId,
+          numero: data.numero,
+        };
+        state.deliveries.push(delivery);
+        return { id: delivery.id };
+      },
+    },
+    deliveryItem: {
+      create: async ({
+        data,
+      }: {
+        data: {
+          deliveryId: string;
+          orderItemId: string;
+          productId: string;
+          quantiteRecue: number;
+        };
+      }) => {
+        state.deliveryItems.push(data);
+        return data;
+      },
+    },
     order: {
       findFirst: async ({
         where,
@@ -167,7 +220,8 @@ function seedOrder({
     id: orderId,
     pharmacyId: "pharmacy-1",
     supplierId: "supplier-1",
-    status: "PENDING",
+    status: "ENVOYEE",
+    numero: state.orders.length + 1,
     createdAt: new Date(),
   });
 
@@ -201,17 +255,20 @@ beforeEach(() => {
   state.products = [];
   state.suppliers = [];
   state.stockMovements = [];
+  state.deliveries = [];
+  state.deliveryItems = [];
+  state.counters = new Map();
 });
 
 describe("receiveOrder", () => {
-  it("sets status to PARTIALLY_RECEIVED and updates stock when only part of the order arrives", async () => {
+  it("sets status to PARTIELLEMENT_RECUE and updates stock when only part of the order arrives", async () => {
     const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 5 }] });
 
     const result = await receiveOrder(orderId, {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 4 }],
     });
 
-    expect(result.status).toBe("PARTIALLY_RECEIVED");
+    expect(result.status).toBe("PARTIELLEMENT_RECUE");
     expect(result.items[0].receivedQuantity).toBe(4);
     expect(state.products[0].quantityInStock).toBe(9); // 5 + 4
     expect(state.stockMovements).toHaveLength(1);
@@ -222,36 +279,46 @@ describe("receiveOrder", () => {
     });
   });
 
-  it("sets status to RECEIVED once every line is fully received", async () => {
+  it("sets status to RECUE once every line is fully received", async () => {
     const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 0 }] });
 
     const result = await receiveOrder(orderId, {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 10 }],
     });
 
-    expect(result.status).toBe("RECEIVED");
+    expect(result.status).toBe("RECUE");
     expect(result.items[0].receivedQuantity).toBe(10);
     expect(state.products[0].quantityInStock).toBe(10);
   });
 
-  it("moves from PARTIALLY_RECEIVED to RECEIVED across two separate receptions of the same order", async () => {
+  it("moves from PARTIELLEMENT_RECUE to RECUE across two separate receptions of the same order", async () => {
     const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 0 }] });
 
     const first = await receiveOrder(orderId, {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 6 }],
     });
-    expect(first.status).toBe("PARTIALLY_RECEIVED");
+    // Six of ten in: still outstanding, so the order must not close yet.
+    expect(first.status).toBe("PARTIELLEMENT_RECUE");
 
     const second = await receiveOrder(orderId, {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 4 }],
     });
 
-    expect(second.status).toBe("RECEIVED");
+    // 6 + 4 = the 10 ordered, so the cumulative total — not this single
+    // reception — is what flips the order to RECUE.
+    expect(second.status).toBe("RECUE");
     expect(second.items[0].receivedQuantity).toBe(10);
     expect(state.products[0].quantityInStock).toBe(10);
+
+    // Each reception leaves its own delivery note, with its own number:
+    // two shipments must be two traceable documents, not one running total.
+    expect(state.deliveries).toHaveLength(2);
+    expect(state.deliveries.map((d) => d.numero)).toEqual([1, 2]);
+    expect(state.deliveryItems.map((i) => i.quantiteRecue)).toEqual([6, 4]);
+    expect(new Set(state.deliveryItems.map((i) => i.deliveryId)).size).toBe(2);
   });
 
-  it("keeps the order PARTIALLY_RECEIVED when only one of several lines is received", async () => {
+  it("keeps the order PARTIELLEMENT_RECUE when only one of several lines is received", async () => {
     const { orderId, itemIds } = seedOrder({
       itemsSpec: [
         { quantity: 5, quantityInStock: 0 },
@@ -263,7 +330,7 @@ describe("receiveOrder", () => {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 5 }],
     });
 
-    expect(result.status).toBe("PARTIALLY_RECEIVED");
+    expect(result.status).toBe("PARTIELLEMENT_RECUE");
     expect(state.products[0].quantityInStock).toBe(5);
     expect(state.products[1].quantityInStock).toBe(0); // untouched second line
   });
@@ -275,7 +342,7 @@ describe("receiveOrder", () => {
       lines: [{ orderItemId: itemIds[0], receivedQuantity: 50 }],
     });
 
-    expect(result.status).toBe("RECEIVED");
+    expect(result.status).toBe("RECUE");
     expect(result.items[0].receivedQuantity).toBe(5);
     expect(state.products[0].quantityInStock).toBe(5);
   });

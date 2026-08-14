@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ClipboardList } from "lucide-react";
 import { receiveOrder } from "@/lib/offline/orders";
 import type { OrderRecord } from "@/lib/server/orders";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -17,10 +16,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PackagePlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { OrderStatusBadge } from "@/components/features/orders/order-status-badge";
 import { DashboardHeader } from "@/components/features/dashboard/dashboard-header";
+import { formatOrderNumber } from "@/lib/orders/numbering";
 
 function remainingOf(item: OrderRecord["items"][number]): number {
   return item.quantity - item.receivedQuantity;
@@ -28,7 +28,7 @@ function remainingOf(item: OrderRecord["items"][number]): number {
 
 export function ReceiveOrderForm({ order }: { order: OrderRecord }) {
   const router = useRouter();
-  const canReceive = order.status === "PENDING" || order.status === "PARTIALLY_RECEIVED";
+  const canReceive = order.status === "ENVOYEE" || order.status === "PARTIELLEMENT_RECUE";
 
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(order.items.map((item) => [item.id, remainingOf(item)])),
@@ -57,10 +57,11 @@ export function ReceiveOrderForm({ order }: { order: OrderRecord }) {
       ),
     onSuccess: () => {
       // The write is queued locally and applied for real by the sync
-      // engine — the true server-confirmed status only shows up once
-      // that's happened, hence `router.refresh()` here rather than
-      // assuming an immediate status transition.
+      // engine — the true server-confirmed status (and the delivery
+      // note's number) only exist once that's happened, hence the return
+      // to the order rather than any claim about the result here.
       setQueued(true);
+      router.push(`/commandes/${order.id}`);
       router.refresh();
     },
   });
@@ -71,12 +72,11 @@ export function ReceiveOrderForm({ order }: { order: OrderRecord }) {
   return (
     <div className="space-y-sp-lg">
       <DashboardHeader
-        title={`Commande — ${order.supplierName}`}
-        subtitle={order.createdAt.toLocaleString("fr-FR")}
-        icon={<ClipboardList />}
-        backHref="/dashboard/commandes"
-        backLabel="Commandes"
-        actions={<OrderStatusBadge status={order.status} />}
+        title={`Réceptionner — ${formatOrderNumber(order.numero)}`}
+        subtitle={order.supplierName}
+        icon={<PackagePlus />}
+        backHref={`/commandes/${order.id}`}
+        backLabel="la commande"
       />
 
       <Card>

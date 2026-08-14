@@ -292,6 +292,26 @@ export async function listInvoices(filters?: {
   }));
 }
 
+/** Invoices issued for one client — the "Factures" section of their sheet. */
+export async function listClientInvoices(clientId: string): Promise<InvoiceListItem[]> {
+  const user = await requireUser();
+
+  const invoices = await prisma.invoice.findMany({
+    where: { pharmacyId: user.pharmacyId, clientId },
+    orderBy: { issuedAt: "desc" },
+    select: { id: true, number: true, issuedAt: true, clientName: true, totalTtc: true, status: true },
+  });
+
+  return invoices.map((invoice) => ({
+    id: invoice.id,
+    number: invoice.number,
+    issuedAt: invoice.issuedAt,
+    clientName: invoice.clientName,
+    totalTtc: Number(invoice.totalTtc),
+    status: invoice.status === "CANCELLED" ? "cancelled" : "issued",
+  }));
+}
+
 export async function getInvoice(id: string): Promise<InvoiceDetail | null> {
   const user = await requireUser();
 
