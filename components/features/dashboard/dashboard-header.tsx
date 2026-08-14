@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ArrowLeft, Bell, ChevronDown, LogOut, Settings } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, LogOut, Settings, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSyncStatus } from "@/components/features/offline/use-sync-status";
-import { listPendingSyncItems } from "@/lib/offline/sync-queue";
+import { syncStatusLabel } from "@/lib/offline/sync-engine";
+import { listOutstandingSyncItems, type OutstandingSyncItem } from "@/lib/offline/sync-queue";
 import type { SyncOperationType } from "@/lib/offline/db";
 import { useDashboardUser } from "@/components/providers/dashboard-user-provider";
 import { AvatarBadge } from "@/components/ui/avatar-badge";
@@ -18,6 +19,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { signOutAction } from "@/lib/auth/actions";
+import { clearCachedPages } from "@/components/providers/service-worker-registrar";
+import { clearRememberedCounts } from "@/lib/offline/last-known-counts";
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Titulaire",
@@ -31,18 +34,68 @@ const SYNC_ITEM_LABELS: Record<SyncOperationType, string> = {
   receiveOrder: "réception de commande",
 };
 
+/** Counts per operation type, so the panel reads "2 ventes" not two rows. */
+function groupByType(items: OutstandingSyncItem[]): Map<SyncOperationType, number> {
+  const grouped = new Map<SyncOperationType, number>();
+  for (const item of items) {
+    grouped.set(item.type, (grouped.get(item.type) ?? 0) + 1);
+  }
+  return grouped;
+}
+
+function SyncGroup({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: OutstandingSyncItem[];
+  tone?: "alert";
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="space-y-sp-xs px-sp-xs py-sp-xs">
+      <p
+        className={cn(
+          "text-[11px] font-semibold tracking-wide uppercase",
+          tone === "alert" ? "text-destructive" : "text-muted-foreground",
+        )}
+      >
+        {title}
+      </p>
+      <ul className="space-y-sp-xs">
+        {[...groupByType(items).entries()].map(([type, count]) => (
+          <li key={type} className="flex items-center justify-between gap-sp-md text-sm">
+            <span className="text-foreground">{SYNC_ITEM_LABELS[type] ?? type}</span>
+            <span className="text-muted-foreground">
+              {count} {count > 1 ? "éléments" : "élément"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function SyncStatusMenu() {
   const { status, pendingCount } = useSyncStatus();
-  const pendingItems = useLiveQuery(() => listPendingSyncItems(), []);
+  /**
+   * Deliberately NOT `listPendingSyncItems`: that one answers "due for
+   * another attempt right now", so writes serving out a retry backoff drop
+   * out of it. Listing from it while counting from the whole queue is what
+   * made this panel print "6 écritures bloquées" directly above "Aucun
+   * élément en attente". One query now feeds both.
+   */
+  const outstanding = useLiveQuery(() => listOutstandingSyncItems(), []) ?? [];
 
   const dotColor =
     status === "online" ? "bg-green-500" : status === "syncing" ? "bg-amber-500 animate-pulse" : "bg-gray-400";
-  const label = status === "offline" ? "Hors ligne" : status === "syncing" ? "Synchronisation..." : "En ligne";
+  const label = syncStatusLabel(status);
 
-  const grouped = new Map<SyncOperationType, number>();
-  for (const item of pendingItems ?? []) {
-    grouped.set(item.type, (grouped.get(item.type) ?? 0) + 1);
-  }
+  const stalled = outstanding.filter((item) => item.isStalled);
+  const waiting = outstanding.filter((item) => !item.isStalled);
+  const stalledCount = stalled.length;
 
   return (
     <div className="flex items-center gap-sp-xs text-sm">
@@ -54,7 +107,14 @@ function SyncStatusMenu() {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="font-medium text-primary underline-offset-2 outline-none hover:underline focus-visible:underline"
+              className={cn(
+                "font-medium underline-offset-2 outline-none hover:underline focus-visible:underline",
+                // A write that keeps failing is no longer merely "waiting":
+                // it needs someone to look. Nothing is ever dropped, so this
+                // notice is the only thing standing between a stuck write
+                // and it going unnoticed for days.
+                stalledCount > 0 ? "text-destructive" : "text-primary",
+              )}
             >
               · {pendingCount} en attente{pendingCount > 1 ? "s" : ""}
             </button>
@@ -62,19 +122,33 @@ function SyncStatusMenu() {
           <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel>File de synchronisation</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {grouped.size === 0 ? (
-              <p className="px-sp-xs py-sp-xs text-sm text-muted-foreground">Aucun élément en attente.</p>
+            {stalledCount > 0 && (
+              <div className="mb-sp-xs flex gap-sp-sm rounded-lg bg-destructive/10 px-sp-sm py-sp-sm text-sm text-destructive">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.75} aria-hidden />
+                <span>
+                  <strong className="font-semibold">
+                    {stalledCount} écriture{stalledCount > 1 ? "s" : ""} bloquée
+                    {stalledCount > 1 ? "s" : ""}
+                  </strong>{" "}
+                  — les tentatives continuent, mais une vérification manuelle est
+                  conseillée.
+                </span>
+              </div>
+            )}
+
+            {outstanding.length === 0 ? (
+              <p className="px-sp-xs py-sp-xs text-sm text-muted-foreground">
+                Aucun élément en attente.
+              </p>
             ) : (
-              <ul className="space-y-sp-xs">
-                {[...grouped.entries()].map(([type, count]) => (
-                  <li key={type} className="flex items-center justify-between gap-sp-md px-sp-xs py-sp-xs text-sm">
-                    <span className="text-foreground">{SYNC_ITEM_LABELS[type] ?? type}</span>
-                    <span className="text-muted-foreground">
-                      {count} {count > 1 ? "éléments" : "élément"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <SyncGroup title="En attente d'envoi" items={waiting} />
+                <SyncGroup
+                  title="En échec — nouvelle tentative programmée"
+                  items={stalled}
+                  tone="alert"
+                />
+              </>
             )}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -99,6 +173,18 @@ function NotificationsBell({ hasUnread }: { hasUnread: boolean }) {
       )}
     </button>
   );
+}
+
+/**
+ * Signing out also drops what was kept on the device for this account:
+ * the cached page documents and the remembered badge counts. Left behind,
+ * the next person at the counter would be served the previous user's
+ * dashboard straight from cache.
+ */
+async function handleSignOut() {
+  clearRememberedCounts();
+  await clearCachedPages();
+  await signOutAction();
 }
 
 function UserMenu() {
@@ -133,7 +219,7 @@ function UserMenu() {
             </Link>
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem variant="destructive" onClick={() => void signOutAction()}>
+        <DropdownMenuItem variant="destructive" onClick={() => void handleSignOut()}>
           <LogOut /> Déconnexion
         </DropdownMenuItem>
       </DropdownMenuContent>

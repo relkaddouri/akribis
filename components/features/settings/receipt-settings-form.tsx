@@ -25,6 +25,7 @@ const SAMPLE_RECEIPT: Receipt = {
     { productId: "1", productName: "Doliprane 500mg", quantity: 3, unitPrice: 15.5, lineTotal: 46.5 },
     { productId: "2", productName: "Amoxicilline 500mg", quantity: 1, unitPrice: 32, lineTotal: 32 },
   ],
+  priceDrifts: [],
 };
 
 export function ReceiptSettingsForm({

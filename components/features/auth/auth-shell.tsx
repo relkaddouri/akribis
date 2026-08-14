@@ -1,4 +1,4 @@
-import Image from "next/image";
+import { BrandLogo } from "@/components/ui/brand-logo";
 import { AuthBrandPanel } from "@/components/features/auth/auth-brand-panel";
 
 /**
@@ -22,9 +22,8 @@ export function AuthShell({
 
       <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm space-y-8">
-          <div className="flex items-center justify-center gap-2.5 lg:justify-start">
-            <Image src="/icon.svg" alt="" width={44} height={44} className="size-11" />
-            <span className="font-heading text-lg font-semibold text-foreground">Akribis</span>
+          <div className="flex items-center justify-center lg:justify-start">
+            <BrandLogo height={40} priority />
           </div>
 
           <div className="space-y-1 text-center lg:text-left">

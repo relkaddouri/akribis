@@ -43,7 +43,13 @@ export type LocalProduct = ProductRecord & {
 };
 
 export type SyncOperationType = "createProduct" | "updateProduct" | "createSale" | "receiveOrder";
-export type SyncItemStatus = "pending" | "syncing" | "failed" | "synced";
+/**
+ * `rejected` is terminal and deliberate: the server refused on the merits
+ * (insufficient stock, missing product) and the refusal is recorded in the
+ * conflict log. `failed` never is — an item keeps that status until it
+ * eventually goes through, however many attempts that takes.
+ */
+export type SyncItemStatus = "pending" | "syncing" | "failed" | "synced" | "rejected";
 
 export type SyncQueueItem = {
   id: string;
@@ -58,9 +64,31 @@ export type SyncQueueItem = {
   attempts: number;
   lastError: string | null;
   createdAt: Date;
+  /**
+   * Earliest moment this item may be tried again — the backoff between
+   * retries. Absent on items queued before backoff existed, which are
+   * treated as due immediately.
+   */
+  nextAttemptAt?: Date;
 };
 
-export type ConflictResolution = "remote_wins" | "sync_rejected";
+/**
+ * `price_drift` is not a conflict the engine resolved — nothing was
+ * changed and nothing was lost. It records that a sale synced at a price
+ * the catalogue has since moved away from, so an odd one can be looked
+ * into afterwards. See the pricing rule in lib/server/sales.ts.
+ */
+/**
+ * `abandoned` is the only one a human causes: a write that can never
+ * succeed, discarded deliberately from Paramètres. Recorded so that
+ * throwing data away always leaves a trace, even when it is the right
+ * call.
+ */
+export type ConflictResolution =
+  | "remote_wins"
+  | "sync_rejected"
+  | "price_drift"
+  | "abandoned";
 
 export type ConflictLogItem = {
   id: string;

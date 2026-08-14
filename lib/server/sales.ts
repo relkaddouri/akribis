@@ -10,6 +10,22 @@
  * line items, and logs a stock movement, and all of it has to succeed
  * or fail together — a half-applied sale (stock decremented but no sale
  * row, or vice versa) would corrupt the inventory.
+ *
+ * THE PRICING RULE, which the rest of this file exists to honour:
+ *
+ *   A sale is recorded at the price shown on the customer's ticket when
+ *   it was rung up — never at the catalogue price in force when the write
+ *   reaches the server.
+ *
+ * The two are the same thing online. They come apart offline, where a
+ * queued sale can reach Postgres hours later, after the shelf price has
+ * been changed. Repricing it then would mean the accounts disagree with
+ * the piece of paper the customer is holding, and the customer's paper is
+ * the one that is true: that is the money that changed hands.
+ *
+ * So `items[].unitPrice` from the till wins, and the catalogue price is
+ * only a fallback for payloads that carry none. A gap between the two is
+ * reported back in `Receipt.priceDrifts` — recorded, never corrected.
  */
 
 import { revalidatePath } from "next/cache";
@@ -28,6 +44,21 @@ export type ReceiptLine = {
   lineTotal: number;
 };
 
+/**
+ * A line whose ticket price no longer matches the catalogue. Purely
+ * informational — the sale is recorded at `chargedPrice` regardless — but
+ * a large or frequent gap is worth someone looking at, so it travels back
+ * to the caller instead of being silently discarded.
+ */
+export type PriceDrift = {
+  productId: string;
+  productName: string;
+  /** What the customer paid, and what was recorded. */
+  chargedPrice: number;
+  /** What the product costs now, for comparison only. */
+  catalogPrice: number;
+};
+
 export type Receipt = {
   id: string;
   createdAt: Date;
@@ -35,6 +66,7 @@ export type Receipt = {
   totalAmount: number;
   clientName: string | null;
   items: ReceiptLine[];
+  priceDrifts: PriceDrift[];
 };
 
 export async function createSale(
@@ -68,6 +100,7 @@ export async function createSale(
     const productById = new Map(products.map((product) => [product.id, product]));
 
     const items: ReceiptLine[] = [];
+    const priceDrifts: PriceDrift[] = [];
 
     for (const item of parsed.items) {
       const product = productById.get(item.productId)!;
@@ -91,12 +124,26 @@ export async function createSale(
         );
       }
 
+      // The pricing rule, applied. `??` and not `||`: a legitimate zero
+      // (a free line) must not silently fall through to the catalogue.
+      const catalogPrice = Number(product.price);
+      const unitPrice = item.unitPrice ?? catalogPrice;
+
+      if (item.unitPrice !== undefined && item.unitPrice !== catalogPrice) {
+        priceDrifts.push({
+          productId: product.id,
+          productName: product.name,
+          chargedPrice: unitPrice,
+          catalogPrice,
+        });
+      }
+
       items.push({
         productId: product.id,
         productName: product.name,
         quantity: item.quantity,
-        unitPrice: Number(product.price),
-        lineTotal: Number(product.price) * item.quantity,
+        unitPrice,
+        lineTotal: unitPrice * item.quantity,
       });
     }
 
@@ -170,6 +217,7 @@ export async function createSale(
       totalAmount,
       clientName: client?.name ?? null,
       items,
+      priceDrifts,
     };
   });
 

@@ -70,16 +70,24 @@ function makeTx() {
       create: async ({
         data,
       }: {
-        data: { orderId: string; numero: number };
+        data: { id?: string; orderId: string; numero: number };
       }) => {
+        // Honours a caller-supplied id, like Postgres does, so a replay
+        // carrying the same id is visible as a duplicate rather than
+        // silently getting a fresh one.
         const delivery = {
-          id: `dl${state.deliveries.length + 1}`,
+          id: data.id ?? `dl${state.deliveries.length + 1}`,
           orderId: data.orderId,
           numero: data.numero,
         };
+        if (state.deliveries.some((d) => d.id === delivery.id)) {
+          throw new Error("Unique constraint failed on the fields: (`id`)");
+        }
         state.deliveries.push(delivery);
         return { id: delivery.id };
       },
+      findFirst: async ({ where }: { where: { id: string; pharmacyId: string } }) =>
+        state.deliveries.find((d) => d.id === where.id) ?? null,
     },
     deliveryItem: {
       create: async ({
@@ -345,5 +353,73 @@ describe("receiveOrder", () => {
     expect(result.status).toBe("RECUE");
     expect(result.items[0].receivedQuantity).toBe(5);
     expect(state.products[0].quantityInStock).toBe(5);
+  });
+});
+
+describe("a reception replayed after a lost reply", () => {
+  /**
+   * The scenario from the offline diagnostic. The queued write reaches the
+   * server and commits, but the reply never comes back; the sync engine
+   * reads that as a connectivity failure and retries forever. Without an
+   * idempotency key every retry was a fresh, independent reception.
+   */
+  it("receives a partial shipment once, however many times it is replayed", async () => {
+    const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 0 }] });
+    const deliveryId = "delivery-generated-by-the-client";
+    const input = { lines: [{ orderItemId: itemIds[0]!, receivedQuantity: 5 }] };
+
+    await receiveOrder(orderId, input, { id: deliveryId });
+    await receiveOrder(orderId, input, { id: deliveryId });
+    await receiveOrder(orderId, input, { id: deliveryId });
+
+    // 5 of the 10 ordered arrived. Replaying must not turn that into 10.
+    expect(state.deliveries).toHaveLength(1);
+    expect(state.orderItems[0]!.receivedQuantity).toBe(5);
+    expect(state.products[0]!.quantityInStock).toBe(5);
+    expect(state.stockMovements).toHaveLength(1);
+    // Still awaiting the other 5 — a replay must not close the order.
+    expect(state.orders[0]!.status).toBe("PARTIELLEMENT_RECUE");
+  });
+
+  it("leaves no empty delivery note behind when the whole order is replayed", async () => {
+    const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 0 }] });
+    const deliveryId = "delivery-full";
+    const input = { lines: [{ orderItemId: itemIds[0]!, receivedQuantity: 10 }] };
+
+    await receiveOrder(orderId, input, { id: deliveryId });
+    await receiveOrder(orderId, input, { id: deliveryId });
+
+    // The `min(requested, remaining)` clamp already protected the
+    // quantities here, but the second call still produced a delivery row
+    // with no lines — a phantom BL in the order's history.
+    expect(state.deliveries).toHaveLength(1);
+    expect(state.orderItems[0]!.receivedQuantity).toBe(10);
+    expect(state.orders[0]!.status).toBe("RECUE");
+  });
+
+  it("burns no delivery number on a replay", async () => {
+    const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 4, quantityInStock: 0 }] });
+    const input = { lines: [{ orderItemId: itemIds[0]!, receivedQuantity: 2 }] };
+
+    await receiveOrder(orderId, input, { id: "delivery-a" });
+    await receiveOrder(orderId, input, { id: "delivery-a" });
+    // A genuinely new reception, after the replay.
+    await receiveOrder(orderId, input, { id: "delivery-b" });
+
+    // Numbers 1 and 2 — not 1 and 3. Gaps in a document sequence are the
+    // kind of thing an auditor asks about.
+    expect(state.deliveries.map((d) => d.numero)).toEqual([1, 2]);
+  });
+
+  it("still treats two distinct receptions as two deliveries", async () => {
+    const { orderId, itemIds } = seedOrder({ itemsSpec: [{ quantity: 10, quantityInStock: 0 }] });
+
+    await receiveOrder(orderId, { lines: [{ orderItemId: itemIds[0]!, receivedQuantity: 4 }] }, { id: "d1" });
+    await receiveOrder(orderId, { lines: [{ orderItemId: itemIds[0]!, receivedQuantity: 6 }] }, { id: "d2" });
+
+    // Idempotence must not collapse real partial shipments into one.
+    expect(state.deliveries).toHaveLength(2);
+    expect(state.orderItems[0]!.receivedQuantity).toBe(10);
+    expect(state.products[0]!.quantityInStock).toBe(10);
   });
 });

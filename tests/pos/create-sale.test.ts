@@ -242,3 +242,81 @@ describe("createSale", () => {
     expect(state.sales).toHaveLength(0);
   });
 });
+
+describe("the price the customer actually paid", () => {
+  /**
+   * Diagnostic bug ③. A sale made offline prints its ticket from the price
+   * held on the device, but the queued payload carried only
+   * {productId, quantity}: at sync time the server priced the line from the
+   * catalogue instead. Change the shelf price in between — the usual case
+   * being a supplier price rise applied in the morning — and the customer
+   * walked out with a ticket the accounts disagreed with.
+   */
+  it("charges the ticket price, not the catalogue price at sync time", async () => {
+    const product = seedProduct({ id: "p1", quantityInStock: 10, price: 10 });
+
+    // The sale happened at 10. Overnight the catalogue moved to 15, and
+    // only now does the queued write reach the server.
+    product.price = 15;
+
+    const receipt = await createSale({
+      paymentMethod: "CASH",
+      items: [{ productId: "p1", quantity: 2, unitPrice: 10 }],
+    });
+
+    // 20, the figure on the customer's ticket — not 30.
+    expect(receipt.totalAmount).toBe(20);
+    expect(state.sales[0]!.totalAmount).toBe(20);
+    expect(state.saleItems[0]!.unitPrice).toBe(10);
+  });
+
+  it("reports the gap without changing what was charged", async () => {
+    const product = seedProduct({ id: "p1", quantityInStock: 10, price: 10 });
+    product.price = 15;
+
+    const receipt = await createSale({
+      paymentMethod: "CASH",
+      items: [{ productId: "p1", quantity: 2, unitPrice: 10 }],
+    });
+
+    // The amount stands; the discrepancy is merely recorded, so an unusual
+    // one can be looked into afterwards.
+    expect(receipt.totalAmount).toBe(20);
+    expect(receipt.priceDrifts).toEqual([
+      { productId: "p1", productName: "Doliprane 500mg", chargedPrice: 10, catalogPrice: 15 },
+    ]);
+  });
+
+  it("says nothing when the price never moved", async () => {
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    const receipt = await createSale({
+      paymentMethod: "CASH",
+      items: [{ productId: "p1", quantity: 2, unitPrice: 12.5 }],
+    });
+
+    expect(receipt.priceDrifts).toEqual([]);
+  });
+
+  it("falls back to the catalogue price when the payload carries none", async () => {
+    // Items queued before prices were included, and the online path if it
+    // ever calls this directly: unchanged behaviour, no drift to report.
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    const receipt = await createSale({
+      paymentMethod: "CASH",
+      items: [{ productId: "p1", quantity: 2 }],
+    });
+
+    expect(receipt.totalAmount).toBe(25);
+    expect(receipt.priceDrifts).toEqual([]);
+  });
+
+  it("refuses a negative price rather than trusting the client blindly", async () => {
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await expect(
+      createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1, unitPrice: -5 }] }),
+    ).rejects.toThrow();
+  });
+});
