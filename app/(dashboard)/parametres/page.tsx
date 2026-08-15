@@ -5,6 +5,8 @@ import { PharmacyInfoForm } from "@/components/features/settings/pharmacy-info-f
 import { ReceiptSettingsForm } from "@/components/features/settings/receipt-settings-form";
 import { InviteAssistantForm } from "@/components/features/auth/invite-assistant-form";
 import { ConflictLogView } from "@/components/features/offline/conflict-log-view";
+import { SyncQueueMaintenance } from "@/components/features/offline/sync-queue-maintenance";
+import { ProductResync } from "@/components/features/offline/product-resync";
 import {
   Card,
   CardContent,
@@ -29,6 +31,7 @@ export default async function ParametresPage() {
             <TabsTrigger value="informations">Informations</TabsTrigger>
             <TabsTrigger value="ticket">Ticket de caisse</TabsTrigger>
             <TabsTrigger value="utilisateurs">Utilisateurs</TabsTrigger>
+            <TabsTrigger value="hors-ligne">Hors ligne</TabsTrigger>
           </TabsList>
 
           <TabsContent value="informations" className="max-w-2xl">
@@ -73,6 +76,14 @@ export default async function ParametresPage() {
               </CardContent>
             </Card>
 
+          </TabsContent>
+
+          {/* Its own tab rather than tacked onto "Utilisateurs", where the
+              conflict log used to sit: this is where someone goes when the
+              sync badge is telling them something. */}
+          <TabsContent value="hors-ligne" className="max-w-3xl space-y-sp-lg">
+            <SyncQueueMaintenance />
+            <ProductResync />
             <ConflictLogView />
           </TabsContent>
         </Tabs>

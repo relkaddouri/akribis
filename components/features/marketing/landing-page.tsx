@@ -1,4 +1,4 @@
-import Image from "next/image";
+import { BrandLogo } from "@/components/ui/brand-logo";
 import Link from "next/link";
 import {
   BarChart3,
@@ -79,9 +79,8 @@ export function LandingPage() {
     <div className="bg-background">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-card/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/icon.svg" alt="" width={40} height={40} className="size-10" />
-            <span className="font-heading text-lg font-semibold text-foreground">Akribis</span>
+          <Link href="/" className="flex items-center">
+            <BrandLogo height={34} priority />
           </Link>
           <Button asChild variant="outline">
             <Link href="/login">Connexion</Link>
@@ -182,9 +181,8 @@ export function LandingPage() {
 
       <footer className="border-t border-border/60">
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 py-8 text-sm text-muted-foreground sm:flex-row sm:justify-between">
-          <div className="flex items-center gap-2">
-            <Image src="/icon.svg" alt="" width={28} height={28} className="size-7" />
-            <span className="font-medium text-foreground">Akribis</span>
+          <div className="flex items-center">
+            <BrandLogo height={26} />
           </div>
           <nav className="flex items-center gap-6">
             <a href="#" className="hover:text-foreground hover:underline">

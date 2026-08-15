@@ -20,3 +20,15 @@ export async function listConflicts(): Promise<ConflictLogItem[]> {
   const items = await getDb().conflictLog.toArray();
   return items.sort((a, b) => b.resolvedAt.getTime() - a.resolvedAt.getTime());
 }
+
+/**
+ * Empties the log. Safe in a way discarding a queued write is not: these
+ * are records of things already resolved, not writes still owed to the
+ * server.
+ */
+export async function clearConflicts(): Promise<number> {
+  const db = getDb();
+  const count = await db.conflictLog.count();
+  await db.conflictLog.clear();
+  return count;
+}
