@@ -362,6 +362,7 @@ export async function createOrder(input: OrderFormInput): Promise<OrderModel> {
 export async function receiveOrder(
   orderId: string,
   input: ReceiveOrderInput,
+  options?: { id?: string },
 ): Promise<OrderRecord> {
   const user = await requireUser();
   const parsed = receiveOrderSchema.parse(input);
@@ -373,6 +374,29 @@ export async function receiveOrder(
     });
     if (!order) {
       throw new Error("Commande introuvable.");
+    }
+
+    /**
+     * Idempotency key, same mechanism `createProduct` and `createSale`
+     * already use: the offline layer generates the delivery's id when it
+     * queues the write, so a replay carries the id of the delivery it
+     * already created.
+     *
+     * This matters because a queued write can commit and then lose its
+     * reply — the sync engine reads that as a connectivity failure and
+     * retries. Without this check every retry was an independent
+     * reception: a partial shipment of 5 became 10, and the order could
+     * close as fully received on goods that never arrived.
+     *
+     * Checked before the number is allocated, so a replay leaves no gap
+     * in the delivery-note sequence.
+     */
+    if (options?.id) {
+      const existing = await tx.delivery.findFirst({
+        where: { id: options.id, pharmacyId: user.pharmacyId },
+        select: { id: true },
+      });
+      if (existing) return;
     }
 
     const requestedByLine = new Map(
@@ -387,7 +411,15 @@ export async function receiveOrder(
     // traceable documents instead of a single running total on OrderItem.
     const deliveryNumero = await allocateDocumentNumber(tx, user.pharmacyId, "delivery");
     const delivery = await tx.delivery.create({
-      data: { pharmacyId: user.pharmacyId, orderId: order.id, numero: deliveryNumero },
+      data: {
+        // Same rationale as products and sales: the client-generated id
+        // survives the round trip, which is what makes the check above
+        // able to recognise a replay.
+        ...(options?.id ? { id: options.id } : {}),
+        pharmacyId: user.pharmacyId,
+        orderId: order.id,
+        numero: deliveryNumero,
+      },
       select: { id: true },
     });
 

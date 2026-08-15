@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Manrope, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ServiceWorkerRegistrar } from "@/components/providers/service-worker-registrar";
 
 // Body copy — tables, forms, descriptions.
 const inter = Inter({
@@ -25,8 +26,12 @@ export const metadata: Metadata = {
   description:
     "Akribis, le logiciel de gestion de stock, caisse et clients pensé pour les pharmacies marocaines. Fonctionne même hors ligne.",
   icons: {
+    // No SVG entry: Chrome and Firefox prefer an SVG icon over every PNG
+    // regardless of order, so leaving the old flat mark declared here would
+    // have quietly kept it in the tab and hidden the supplied artwork.
     icon: [
-      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-96.png", type: "image/png", sizes: "96x96" },
+      { url: "/favicon.png", type: "image/png", sizes: "920x920" },
       { url: "/favicon.ico", sizes: "any" },
     ],
     apple: "/apple-touch-icon.png",
@@ -44,6 +49,7 @@ export default function RootLayout({
         className={`${inter.variable} ${manrope.variable} ${geistMono.variable} antialiased`}
       >
         {children}
+        <ServiceWorkerRegistrar />
       </body>
     </html>
   );

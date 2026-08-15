@@ -10,6 +10,9 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Scripts under prisma/ run on plain Node, which resolves ESM strictly
+    // and requires the explicit .ts extension on relative imports.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
@@ -31,9 +34,10 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-verify/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-verify/types/**/*.ts"
+    ".next-nopublic/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

@@ -33,7 +33,9 @@
       "Bash(xargs -r kill -9)",
       "Bash(nslookup -query=AAAA db.mgsexlaklelutwhmumof.supabase.co)",
       "Bash(curl -sS -m 5 -6 -o /dev/null -w \"ipv6 http_code: %{http_code}\\\\n\" https://mgsexlaklelutwhmumof.supabase.co/)",
-      "Bash(mkdir -p /Users/relkaddouri/Documents/Personnal_Projects/Pharmacie/components/features/orders *)"
+      "Bash(mkdir -p /Users/relkaddouri/Documents/Personnal_Projects/Pharmacie/components/features/orders *)",
+      "Bash(NEXT_DIST_DIR=.next-verify npx next start -p 3210)",
+      "Bash(curl -s -o /dev/null -w \"server: %{http_code}\\\\n\" http://localhost:3210/)"
     ]
   }
 }

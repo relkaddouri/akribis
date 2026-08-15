@@ -6,29 +6,44 @@
  * indicator (via useSyncExternalStore in use-sync-status.ts).
  */
 
-import { getDb, type ProductRecord, type SyncQueueItem } from "@/lib/offline/db";
+import { getDb, type ConflictLogItem, type ProductRecord, type SyncQueueItem } from "@/lib/offline/db";
 import {
+  backoffDelayMs,
   countPendingSyncItems,
+  countStalledSyncItems,
   listPendingSyncItems,
   markFailed,
+  markRejected,
   markSynced,
   markSyncing,
   MAX_SYNC_ATTEMPTS,
 } from "@/lib/offline/sync-queue";
+import { listConflicts } from "@/lib/offline/conflict-log";
 import { logConflict } from "@/lib/offline/conflict-log";
 import * as remoteProducts from "@/lib/server/products";
 import * as remoteSales from "@/lib/server/sales";
 import * as remoteOrders from "@/lib/server/orders";
+import * as remoteInventory from "@/lib/server/inventory";
 import type { ProductFormInput } from "@/lib/validations/products";
 import type { CreateSaleInput } from "@/lib/validations/sales";
 import type { ReceiveOrderInput } from "@/lib/validations/orders";
+import type {
+  ApplyInventoryInput,
+  RecordCountInput,
+  StartInventoryInput,
+} from "@/lib/server/inventory";
 
 const POLL_INTERVAL_MS = 15_000;
 
 export type SyncStatus = "offline" | "online" | "syncing";
-export type SyncState = { status: SyncStatus; pendingCount: number };
+export type SyncState = {
+  status: SyncStatus;
+  pendingCount: number;
+  /** Of those, how many have failed enough times to need a human look. */
+  stalledCount: number;
+};
 
-let state: SyncState = { status: "online", pendingCount: 0 };
+let state: SyncState = { status: "online", pendingCount: 0, stalledCount: 0 };
 const listeners = new Set<() => void>();
 
 function setState(patch: Partial<SyncState>) {
@@ -45,6 +60,17 @@ export function getSnapshot(): SyncState {
   return state;
 }
 
+/**
+ * What the header's badge says for each state. Here rather than inline in
+ * the component so the mapping is testable: the badge renders this string
+ * and nothing else, so a test of this function is a test of the badge.
+ */
+export function syncStatusLabel(status: SyncStatus): string {
+  if (status === "offline") return "Hors ligne";
+  if (status === "syncing") return "Synchronisation...";
+  return "En ligne";
+}
+
 function isOnline(): boolean {
   return typeof navigator === "undefined" || navigator.onLine;
 }
@@ -53,10 +79,34 @@ function toLocalProduct(product: ProductRecord) {
   return { ...product, syncStatus: "synced" as const };
 }
 
+/** What a queue item is about, for the conflict log. */
+const ENTITY_TYPE_BY_OPERATION: Record<SyncQueueItem["type"], ConflictLogItem["entityType"]> = {
+  createProduct: "product",
+  updateProduct: "product",
+  createSale: "sale",
+  receiveOrder: "order",
+  startInventory: "inventory",
+  recordInventoryCount: "inventory",
+  applyInventory: "inventory",
+};
+
 /** Errors the server rejected for business reasons — retrying won't help. */
 function isBusinessRejection(message: string): boolean {
-  return /stock insuffisant|introuvable/i.test(message);
+  // A unique-constraint violation belongs here: the row it collides with is
+  // already on the server, so every retry fails identically. Left as an
+  // unknown error it was retried for ever and sat in the badge.
+  return /stock insuffisant|introuvable|déjà terminé|unique constraint failed/i.test(message);
 }
+
+/**
+ * Wordings engines use for a request that never completed. Chrome says
+ * "Failed to fetch", Firefox "NetworkError when attempting to fetch
+ * resource", WebKit any of several — "Load failed" being the one that used
+ * to slip through and cost a sale. Prisma's own unreachable-database
+ * message is here too, since a Server Action re-throws it verbatim.
+ */
+const CONNECTIVITY_MESSAGES =
+  /can't reach database server|failed to fetch|fetch failed|network ?error|network request failed|load failed|network connection was lost|connection appears to be offline|ECONNREFUSED|ETIMEDOUT/i;
 
 /**
  * The request never actually reached (or came back from) the server — a
@@ -65,15 +115,24 @@ function isBusinessRejection(message: string): boolean {
  * even when the database itself is unreachable; this is what actually
  * detects that case. Must retry forever rather than being abandoned like
  * a business rejection, or a real write would be silently dropped.
+ *
+ * The type is checked before the wording. Every engine rejects a fetch
+ * that never completed with a TypeError, so that test holds in browsers
+ * whose phrasing nobody has thought of yet — a list of strings is only a
+ * fallback for errors that arrive re-wrapped, and matching one is what
+ * this function got wrong on Safari.
  */
-function isConnectivityError(message: string): boolean {
-  return /can't reach database server|failed to fetch|network ?error|ECONNREFUSED|ETIMEDOUT|fetch failed/i.test(
-    message,
-  );
+function isConnectivityError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return CONNECTIVITY_MESSAGES.test(message);
 }
 
 async function refreshPendingCount() {
-  setState({ pendingCount: await countPendingSyncItems() });
+  setState({
+    pendingCount: await countPendingSyncItems(),
+    stalledCount: await countStalledSyncItems(),
+  });
 }
 
 /** Set while draining the queue whenever a connectivity error is hit, so processQueue can report "offline" honestly. */
@@ -122,13 +181,86 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
       }
       case "createSale": {
         const payload = item.payload as { id: string; input: CreateSaleInput };
-        await remoteSales.createSale(payload.input, { id: payload.id });
+        const receipt = await remoteSales.createSale(payload.input, { id: payload.id });
+
+        // The sale stands at the price on the customer's ticket; a
+        // catalogue that has moved since is only worth a note. Logged
+        // after markSynced would risk losing it if that write failed, so
+        // it goes first — a duplicate note is harmless, a missing one is
+        // the thing worth avoiding.
+        // Defensive `?? []`: the sale is already committed at this point,
+        // and iterating undefined would throw, marking a write that
+        // succeeded as failed and replaying it forever.
+        for (const drift of receipt.priceDrifts ?? []) {
+          await logConflict({
+            entityType: "sale",
+            entityId: item.entityId,
+            queueItemId: item.id,
+            clientTimestamp: item.clientTimestamp,
+            resolution: "price_drift",
+            detail: `"${drift.productName}" vendu à ${drift.chargedPrice.toFixed(2)} MAD, prix catalogue actuel ${drift.catalogPrice.toFixed(2)} MAD. Le montant facturé reste celui du ticket.`,
+          });
+        }
+
+        await markSynced(item.id);
+        return;
+      }
+      case "startInventory": {
+        const payload = item.payload as { id: string; input: StartInventoryInput };
+        // Client-generated id, same protection as products and sales: a
+        // replay finds the session already on file and changes nothing.
+        const result = await remoteInventory.startInventorySession(payload.input, {
+          id: payload.id,
+        });
+
+        // Products this device holds but the server does not. They stay
+        // countable locally; recorded here so the gap is visible instead of
+        // being discovered when the adjustment silently skips them.
+        if (result.skippedProductIds.length > 0) {
+          await logConflict({
+            entityType: "inventory",
+            entityId: item.entityId,
+            queueItemId: item.id,
+            clientTimestamp: item.clientTimestamp,
+            resolution: "sync_rejected",
+            detail: `${result.skippedProductIds.length} produit(s) de cet inventaire sont inconnus du serveur et ne seront pas ajustés — ils n'ont jamais été synchronisés.`,
+          });
+        }
+
+        await markSynced(item.id);
+        return;
+      }
+      case "recordInventoryCount": {
+        const payload = item.payload as { input: RecordCountInput };
+        // Idempotent through the (session, product) unique index — a replay
+        // rewrites the same row with the same figure.
+        await remoteInventory.recordInventoryCount(payload.input);
+        await markSynced(item.id);
+        return;
+      }
+      case "applyInventory": {
+        const payload = item.payload as { input: ApplyInventoryInput };
+        // The session id is the idempotency key: the server returns early
+        // once the session is closed, so stock is never corrected twice.
+        await remoteInventory.applyInventoryAdjustments(payload.input);
         await markSynced(item.id);
         return;
       }
       case "receiveOrder": {
-        const payload = item.payload as { orderId: string; input: ReceiveOrderInput };
-        await remoteOrders.receiveOrder(payload.orderId, payload.input);
+        const payload = item.payload as {
+          orderId: string;
+          input: ReceiveOrderInput;
+          /** Absent on items queued before delivery ids existed. */
+          deliveryId?: string;
+        };
+        // Optional rather than required: an item already sitting in
+        // IndexedDB when this version shipped has no id, and must still
+        // sync — without idempotence, as before, rather than not at all.
+        await remoteOrders.receiveOrder(
+          payload.orderId,
+          payload.input,
+          payload.deliveryId ? { id: payload.deliveryId } : undefined,
+        );
         await markSynced(item.id);
         return;
       }
@@ -139,8 +271,9 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
     if (isBusinessRejection(message)) {
       // e.g. another till already sold the last unit before this queued
       // sale reached the server — retrying changes nothing, so this is
-      // a resolved conflict, not a transient failure.
-      const entityType = item.type === "createSale" ? "sale" : item.type === "receiveOrder" ? "order" : "product";
+      // a resolved conflict, not a transient failure. The conflict log is
+      // where it stays visible.
+      const entityType = ENTITY_TYPE_BY_OPERATION[item.type];
       await logConflict({
         entityType,
         entityId: item.entityId,
@@ -149,21 +282,30 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
         resolution: "sync_rejected",
         detail: message,
       });
-      await markFailed(item.id, message, MAX_SYNC_ATTEMPTS);
+      await markRejected(item.id, message);
       return;
     }
 
-    if (isConnectivityError(message)) {
+    if (isConnectivityError(err)) {
       // The database/server was unreachable, not a rejection — attempts
-      // must not advance, or this write would eventually be abandoned
-      // (and, once maxed out, drop off the pending count) even though
-      // it was never actually delivered.
+      // must not advance, and no backoff either: the next poll (or the
+      // `online` event) should try again promptly.
       connectivityFailureThisPass = true;
       await markFailed(item.id, message, item.attempts);
       return;
     }
 
-    await markFailed(item.id, message, item.attempts + 1);
+    // An error the engine cannot interpret. It is retried anyway, spaced
+    // further apart each time, and never discarded: whatever this is, a
+    // write the pharmacist believes was recorded must not evaporate
+    // because the code failed to recognise the failure.
+    const attempts = item.attempts + 1;
+    await markFailed(
+      item.id,
+      message,
+      attempts,
+      new Date(Date.now() + backoffDelayMs(attempts)),
+    );
   }
 }
 
@@ -183,8 +325,18 @@ export async function hydrateProductsFromServer(): Promise<void> {
         await db.products.put(toLocalProduct(product));
       }
     });
-  } catch {
-    // Best-effort cache refresh — a failure here shouldn't break queue draining.
+  } catch (err) {
+    // Best-effort cache refresh — a failure here must not break queue
+    // draining. But it is not nothing either: with an empty queue this is
+    // the only server call in the whole pass, so swallowing it whole left
+    // the badge announcing "En ligne" while the database was unreachable.
+    //
+    // Only a connectivity failure counts. A bug in the refresh itself must
+    // not be reported as a lost connection: the badge would then send
+    // someone to check the router over a defect in this code.
+    if (isConnectivityError(err)) {
+      connectivityFailureThisPass = true;
+    }
   }
 }
 
@@ -229,13 +381,46 @@ function handleOffline() {
   setState({ status: "offline" });
 }
 
+/**
+ * Repairs items left by the previous scheme, which used
+ * `attempts = MAX_SYNC_ATTEMPTS` as a terminal state for two very
+ * different things: a business rejection (correctly parked) and a write
+ * that had simply failed too often (wrongly abandoned — bug ②).
+ *
+ * The conflict log tells them apart: a rejection was recorded there with
+ * this item's id. Rejections are marked as such so they stay off the
+ * pending badge; everything else is put back in the queue, because those
+ * are exactly the writes this bug threw away.
+ */
+export async function migrateLegacyQueueItems(): Promise<void> {
+  const db = getDb();
+  const stuck = (await db.syncQueue.where("status").anyOf(["pending", "failed"]).toArray()).filter(
+    (item) => item.attempts >= MAX_SYNC_ATTEMPTS && item.nextAttemptAt === undefined,
+  );
+  if (stuck.length === 0) return;
+
+  const rejectedQueueIds = new Set(
+    (await listConflicts())
+      .filter((conflict) => conflict.resolution === "sync_rejected")
+      .map((conflict) => conflict.queueItemId),
+  );
+
+  for (const item of stuck) {
+    if (rejectedQueueIds.has(item.id)) {
+      await markRejected(item.id, item.lastError ?? "Refusé par le serveur.");
+    } else {
+      await markFailed(item.id, item.lastError ?? "", item.attempts, new Date());
+    }
+  }
+}
+
 export function startSyncEngine(): void {
   if (typeof window === "undefined" || started) return;
   started = true;
   window.addEventListener("online", handleOnline);
   window.addEventListener("offline", handleOffline);
   setState({ status: isOnline() ? "online" : "offline" });
-  void refreshPendingCount();
+  void migrateLegacyQueueItems().then(refreshPendingCount);
   pollTimer = setInterval(() => void processQueue(), POLL_INTERVAL_MS);
   if (isOnline()) void processQueue();
 }

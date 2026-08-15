@@ -49,7 +49,11 @@ export async function receiveOrder(
   await enqueue({
     type: "receiveOrder",
     entityId: orderId,
-    payload: { orderId, input: parsed },
+    // The delivery's id is decided here, not by the server, so that a
+    // retry after a lost reply carries the id of the delivery the first
+    // attempt already created — see receiveOrder in lib/server/orders.ts.
+    // Same mechanism createProduct and createSale use.
+    payload: { orderId, input: parsed, deliveryId: crypto.randomUUID() },
     clientTimestamp,
   });
   void processQueue();

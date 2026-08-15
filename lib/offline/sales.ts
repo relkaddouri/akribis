@@ -65,7 +65,22 @@ export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt
   await enqueue({
     type: "createSale",
     entityId: id,
-    payload: { id, input: parsed },
+    // Prices are taken from `items`, the very lines the ticket was printed
+    // from, so the queued write and the customer's paper cannot disagree.
+    // Sending only {productId, quantity} let the server reprice the sale
+    // from the catalogue whenever it synced later — see the pricing rule
+    // at the top of lib/server/sales.ts.
+    payload: {
+      id,
+      input: {
+        ...parsed,
+        items: items.map((line) => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+        })),
+      },
+    },
     clientTimestamp,
   });
   void processQueue();
@@ -77,5 +92,9 @@ export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt
     totalAmount: round2(items.reduce((sum, item) => sum + item.lineTotal, 0)),
     clientName: clientName ?? null,
     items,
+    // Nothing to compare against yet: this ticket *is* the reference. Any
+    // gap with the catalogue is found later, when the queued write reaches
+    // the server, and reported by it.
+    priceDrifts: [],
   };
 }
