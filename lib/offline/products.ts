@@ -13,6 +13,7 @@
  */
 
 import { getDb, type ProductRecord } from "@/lib/offline/db";
+import * as remoteProducts from "@/lib/server/products";
 import { getOfflinePharmacyId } from "@/lib/offline/session";
 import { enqueue } from "@/lib/offline/sync-queue";
 import { processQueue } from "@/lib/offline/sync-engine";
@@ -179,4 +180,142 @@ export async function updateProduct(id: string, input: ProductFormInput): Promis
   void processQueue();
 
   return toProductRecord(updated);
+}
+
+/**
+ * Rebuilds the form payload the server expects from a cached product, so a
+ * product that only ever existed on this device can be pushed up.
+ *
+ * `purchasePrice` is absent on purpose: the local cache has never carried
+ * it, and inventing one would be worse than leaving the margin blank.
+ */
+function toFormInput(product: ProductRecord): ProductFormInput {
+  return {
+    name: product.name,
+    form: product.form,
+    dosage: product.dosage ?? "",
+    laboratory: product.laboratory ?? "",
+    barcode: product.barcode ?? "",
+    dci: product.dci ?? "",
+    photoUrl: product.photoUrl ?? "",
+    category: (product.category ?? "") as ProductFormInput["category"],
+    price: product.price,
+    pph: product.pph ?? "",
+    tvaVente: product.tvaVente ?? "",
+    tvaAchat: product.tvaAchat ?? "",
+    quantityInStock: product.quantityInStock,
+    lowStockThreshold: product.lowStockThreshold,
+    nearestExpiryDate: product.nearestExpiryDate
+      ? new Date(product.nearestExpiryDate).toISOString().slice(0, 10)
+      : "",
+    remboursable: product.remboursable,
+    baseRemboursement: product.baseRemboursement ?? "",
+    posologieEnfant: product.posologieEnfant ?? "",
+    posologieAdulte: product.posologieAdulte ?? "",
+    monographie: product.monographie ?? "",
+  };
+}
+
+/**
+ * Products this device holds that the server has never received.
+ *
+ * They exist because a `createProduct` write was queued and then lost —
+ * abandoned by the old silent-drop bug, or discarded by hand from the sync
+ * panel. Nothing else reconciles in this direction: the sync engine only
+ * ever pulls the server's products down, so without this they stay local
+ * for ever, and every module that references them (an inventory session,
+ * for instance) breaks on a foreign key the moment it reaches the server.
+ *
+ * Requires connectivity — it has to ask the server what it actually has.
+ */
+export type LocalOnlyProducts = {
+  /** Neither the id nor the barcode exists upstream — safe to send. */
+  pushable: ProductRecord[];
+  /**
+   * The server already has this product under a different id, matched on
+   * barcode. Sending it would break the `(pharmacy_id, barcode)` unique
+   * index, so it is surfaced for a decision instead.
+   */
+  duplicates: Array<{ product: ProductRecord; remoteId: string; remoteName: string }>;
+};
+
+export async function findProductsMissingFromServer(): Promise<LocalOnlyProducts> {
+  const pharmacyId = getOfflinePharmacyId();
+  const remote = await remoteProducts.listProducts();
+  const remoteIds = new Set(remote.map((product) => product.id));
+  /**
+   * Barcodes are unique per pharmacy, so a local product carrying one the
+   * server already knows is the same product under another id — typically
+   * created offline, its sync lost, then created again from another device.
+   * Matching on id alone made the upload fail with P2002.
+   *
+   * Null barcodes are not indexed: Postgres allows any number of them, and
+   * they say nothing about identity.
+   */
+  const remoteByBarcode = new Map(
+    remote
+      .filter((product) => product.barcode)
+      .map((product) => [product.barcode as string, product]),
+  );
+
+  const local = await getDb().products.where("pharmacyId").equals(pharmacyId).toArray();
+  const result: LocalOnlyProducts = { pushable: [], duplicates: [] };
+
+  for (const row of local) {
+    if (remoteIds.has(row.id)) continue;
+    const product = toProductRecord(row);
+    const twin = product.barcode ? remoteByBarcode.get(product.barcode) : undefined;
+    if (twin) {
+      result.duplicates.push({ product, remoteId: twin.id, remoteName: twin.name });
+    } else {
+      result.pushable.push(product);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Queues the missing products for upload, keeping their local ids so every
+ * row that already points at them — inventory counts, sale lines — still
+ * matches once they land.
+ *
+ * Nothing in this app deletes a product, so "absent from the server" can
+ * only mean "never arrived"; there is no risk of resurrecting something
+ * deliberately removed.
+ */
+export async function resyncProductsMissingFromServer(): Promise<{
+  queued: number;
+  alreadyQueued: number;
+}> {
+  const { pushable } = await findProductsMissingFromServer();
+  if (pushable.length === 0) return { queued: 0, alreadyQueued: 0 };
+
+  const db = getDb();
+  const inFlight = new Set(
+    (await db.syncQueue.where("status").anyOf(["pending", "syncing", "failed"]).toArray())
+      .filter((item) => item.type === "createProduct")
+      .map((item) => item.entityId),
+  );
+
+  let queued = 0;
+  let alreadyQueued = 0;
+  for (const product of pushable) {
+    if (inFlight.has(product.id)) {
+      alreadyQueued += 1;
+      continue;
+    }
+    await enqueue({
+      type: "createProduct",
+      entityId: product.id,
+      // Same id as the local row: that is what makes the upload idempotent
+      // and keeps existing local references valid.
+      payload: { id: product.id, input: toFormInput(product) },
+      clientTimestamp: new Date(),
+    });
+    queued += 1;
+  }
+
+  void processQueue();
+  return { queued, alreadyQueued };
 }

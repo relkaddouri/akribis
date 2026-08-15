@@ -44,3 +44,7 @@ yarn-error.log*
 next-env.d.ts
 
 /lib/db/generated
+public/favicon.svg
+public/logo.svg
+public/favicon.svg
+public/logo.svg

@@ -10,6 +10,8 @@ import Dexie, { type Table } from "dexie";
 
 export type SyncStatus = "synced" | "pending";
 
+export type InventorySessionStatus = "en_cours" | "termine";
+
 /** The shape callers (stock/POS components) see — no internal sync bookkeeping. */
 export type ProductRecord = {
   id: string;
@@ -42,7 +44,14 @@ export type LocalProduct = ProductRecord & {
   syncStatus: SyncStatus;
 };
 
-export type SyncOperationType = "createProduct" | "updateProduct" | "createSale" | "receiveOrder";
+export type SyncOperationType =
+  | "createProduct"
+  | "updateProduct"
+  | "createSale"
+  | "receiveOrder"
+  | "startInventory"
+  | "recordInventoryCount"
+  | "applyInventory";
 /**
  * `rejected` is terminal and deliberate: the server refused on the merits
  * (insufficient stock, missing product) and the refusal is recorded in the
@@ -64,6 +73,17 @@ export type SyncQueueItem = {
   attempts: number;
   lastError: string | null;
   createdAt: Date;
+  /**
+   * Strictly increasing insertion order.
+   *
+   * `createdAt` alone is not enough: several writes routinely land in the
+   * same millisecond — opening an inventory session queues the session and
+   * its counts back to back — and sorting on it leaves ties in arbitrary
+   * order. A count reaching the server before the session that owns it is
+   * rejected outright. Absent on items queued before this field existed,
+   * which sort as 0 and stay ahead of anything newer.
+   */
+  seq?: number;
   /**
    * Earliest moment this item may be tried again — the backoff between
    * retries. Absent on items queued before backoff existed, which are
@@ -92,7 +112,7 @@ export type ConflictResolution =
 
 export type ConflictLogItem = {
   id: string;
-  entityType: "product" | "sale" | "order";
+  entityType: "product" | "sale" | "order" | "inventory";
   entityId: string;
   queueItemId: string;
   clientTimestamp: Date;
@@ -101,10 +121,40 @@ export type ConflictLogItem = {
   resolvedAt: Date;
 };
 
+/** A stock count, mirroring `inventory_sessions` on the server. */
+export type LocalInventorySession = {
+  id: string;
+  pharmacyId: string;
+  statut: InventorySessionStatus;
+  dateDebut: Date;
+  dateFin: Date | null;
+  syncStatus: SyncStatus;
+};
+
+/** One product within a session, mirroring `inventory_counts`. */
+export type LocalInventoryCount = {
+  id: string;
+  sessionId: string;
+  productId: string;
+  productName: string;
+  /**
+   * Snapshotted when the session opened, alongside the price. Both are
+   * frozen deliberately: recomputing either at sync time would erase the
+   * discrepancy the count exists to find, and reprice a correction the
+   * pharmacist already signed off on.
+   */
+  quantiteTheorique: number;
+  unitPrice: number;
+  quantiteComptee: number | null;
+  dateComptage: Date | null;
+};
+
 class AkribisOfflineDB extends Dexie {
   products!: Table<LocalProduct, string>;
   syncQueue!: Table<SyncQueueItem, string>;
   conflictLog!: Table<ConflictLogItem, string>;
+  inventorySessions!: Table<LocalInventorySession, string>;
+  inventoryCounts!: Table<LocalInventoryCount, string>;
 
   constructor() {
     super("akribis-offline");
@@ -112,6 +162,12 @@ class AkribisOfflineDB extends Dexie {
       products: "id, pharmacyId, barcode",
       syncQueue: "id, status, createdAt",
       conflictLog: "id, entityId, resolvedAt",
+    });
+    // v2 adds inventory. Dexie carries v1 stores forward untouched, so an
+    // existing install keeps its queued writes and cached products.
+    this.version(2).stores({
+      inventorySessions: "id, pharmacyId, statut, dateDebut",
+      inventoryCounts: "id, sessionId, productId, [sessionId+productId]",
     });
   }
 }

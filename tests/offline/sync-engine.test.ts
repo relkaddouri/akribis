@@ -5,6 +5,7 @@ import { processQueue, getSnapshot, syncStatusLabel } from "@/lib/offline/sync-e
 import {
   countPendingSyncItems,
   discardStalledSyncItems,
+  enqueue,
   listOutstandingSyncItems,
   listPendingSyncItems,
   MAX_SYNC_ATTEMPTS,
@@ -860,5 +861,91 @@ describe("clearing out writes that can never succeed", () => {
 
     expect(await clearConflicts()).toBe(1);
     expect(await db.conflictLog.count()).toBe(0);
+  });
+});
+
+describe("the order writes reach the server", () => {
+  /**
+   * Found by a flaky inventory test, and a real hazard rather than a test
+   * artefact: opening a stock count queues the session and its first counts
+   * within the same millisecond, and sorting the queue on `createdAt` alone
+   * left those ties in arbitrary order. A count arriving before the session
+   * that owns it is refused outright — the count is simply lost.
+   */
+  it("keeps strict insertion order for writes queued in the same millisecond", async () => {
+    const db = getDb();
+    const now = new Date("2026-08-15T10:00:00.000Z");
+    vi.setSystemTime(now);
+
+    // Twenty of them: Dexie returns rows in primary-key (uuid) order, which
+    // bears no relation to insertion order, so with enough items the raw
+    // order is essentially certain to differ from the order they were
+    // written in. Four would sometimes come back already sorted and prove
+    // nothing.
+    const expected = Array.from({ length: 20 }, (_, i) => `item-${i}`);
+    for (const entityId of expected) {
+      await enqueue({ type: "createSale", entityId, payload: {}, clientTimestamp: now });
+    }
+
+    const queued = await db.syncQueue.toArray();
+    // Same millisecond for every one of them, by construction.
+    expect(new Set(queued.map((item) => item.createdAt.getTime())).size).toBe(1);
+    // The raw read really is out of order — otherwise this test would pass
+    // whatever the sort did.
+    expect(queued.map((item) => item.entityId)).not.toEqual(expected);
+
+    const pending = await listPendingSyncItems();
+    expect(pending.map((item) => item.entityId)).toEqual(expected);
+  });
+
+  it("puts an older write ahead of a newer one regardless of insertion counter", async () => {
+    vi.setSystemTime(new Date("2026-08-15T10:00:00.000Z"));
+    await enqueue({
+      type: "createSale",
+      entityId: "older",
+      payload: {},
+      clientTimestamp: new Date(),
+    });
+
+    vi.setSystemTime(new Date("2026-08-15T11:00:00.000Z"));
+    await enqueue({
+      type: "createProduct",
+      entityId: "newer",
+      payload: {},
+      clientTimestamp: new Date(),
+    });
+
+    const pending = await listPendingSyncItems();
+    expect(pending.map((item) => item.entityId)).toEqual(["older", "newer"]);
+  });
+});
+
+describe("a write that collides with a row already on the server", () => {
+  it("parks a unique-constraint violation instead of retrying it for ever", async () => {
+    const db = getDb();
+    await db.products.put(seedProduct({ quantityInStock: 5 }));
+    setOnline(false);
+    await createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] });
+
+    setOnline(true);
+    // Seen in real use when pushing up a product whose barcode was already
+    // upstream under another id. The row it collides with is not going
+    // anywhere, so every retry fails identically.
+    remote.createSale.mockRejectedValue(
+      new Error("Unique constraint failed on the fields: (`pharmacy_id`, `barcode`)"),
+    );
+
+    for (let pass = 0; pass < 6; pass += 1) {
+      vi.setSystemTime(new Date(Date.now() + 10 * 60_000));
+      await processQueue();
+    }
+
+    // Attempted once, then parked and recorded — not hammered, and not
+    // left lighting up the badge for days.
+    expect(remote.createSale).toHaveBeenCalledTimes(1);
+    expect(await countPendingSyncItems()).toBe(0);
+    const [logged] = await db.conflictLog.toArray();
+    expect(logged.resolution).toBe("sync_rejected");
+    expect(logged.detail).toContain("Unique constraint failed");
   });
 });

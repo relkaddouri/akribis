@@ -6,7 +6,7 @@
  * indicator (via useSyncExternalStore in use-sync-status.ts).
  */
 
-import { getDb, type ProductRecord, type SyncQueueItem } from "@/lib/offline/db";
+import { getDb, type ConflictLogItem, type ProductRecord, type SyncQueueItem } from "@/lib/offline/db";
 import {
   backoffDelayMs,
   countPendingSyncItems,
@@ -23,9 +23,15 @@ import { logConflict } from "@/lib/offline/conflict-log";
 import * as remoteProducts from "@/lib/server/products";
 import * as remoteSales from "@/lib/server/sales";
 import * as remoteOrders from "@/lib/server/orders";
+import * as remoteInventory from "@/lib/server/inventory";
 import type { ProductFormInput } from "@/lib/validations/products";
 import type { CreateSaleInput } from "@/lib/validations/sales";
 import type { ReceiveOrderInput } from "@/lib/validations/orders";
+import type {
+  ApplyInventoryInput,
+  RecordCountInput,
+  StartInventoryInput,
+} from "@/lib/server/inventory";
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -73,9 +79,23 @@ function toLocalProduct(product: ProductRecord) {
   return { ...product, syncStatus: "synced" as const };
 }
 
+/** What a queue item is about, for the conflict log. */
+const ENTITY_TYPE_BY_OPERATION: Record<SyncQueueItem["type"], ConflictLogItem["entityType"]> = {
+  createProduct: "product",
+  updateProduct: "product",
+  createSale: "sale",
+  receiveOrder: "order",
+  startInventory: "inventory",
+  recordInventoryCount: "inventory",
+  applyInventory: "inventory",
+};
+
 /** Errors the server rejected for business reasons — retrying won't help. */
 function isBusinessRejection(message: string): boolean {
-  return /stock insuffisant|introuvable/i.test(message);
+  // A unique-constraint violation belongs here: the row it collides with is
+  // already on the server, so every retry fails identically. Left as an
+  // unknown error it was retried for ever and sat in the badge.
+  return /stock insuffisant|introuvable|déjà terminé|unique constraint failed/i.test(message);
 }
 
 /**
@@ -185,6 +205,47 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
         await markSynced(item.id);
         return;
       }
+      case "startInventory": {
+        const payload = item.payload as { id: string; input: StartInventoryInput };
+        // Client-generated id, same protection as products and sales: a
+        // replay finds the session already on file and changes nothing.
+        const result = await remoteInventory.startInventorySession(payload.input, {
+          id: payload.id,
+        });
+
+        // Products this device holds but the server does not. They stay
+        // countable locally; recorded here so the gap is visible instead of
+        // being discovered when the adjustment silently skips them.
+        if (result.skippedProductIds.length > 0) {
+          await logConflict({
+            entityType: "inventory",
+            entityId: item.entityId,
+            queueItemId: item.id,
+            clientTimestamp: item.clientTimestamp,
+            resolution: "sync_rejected",
+            detail: `${result.skippedProductIds.length} produit(s) de cet inventaire sont inconnus du serveur et ne seront pas ajustés — ils n'ont jamais été synchronisés.`,
+          });
+        }
+
+        await markSynced(item.id);
+        return;
+      }
+      case "recordInventoryCount": {
+        const payload = item.payload as { input: RecordCountInput };
+        // Idempotent through the (session, product) unique index — a replay
+        // rewrites the same row with the same figure.
+        await remoteInventory.recordInventoryCount(payload.input);
+        await markSynced(item.id);
+        return;
+      }
+      case "applyInventory": {
+        const payload = item.payload as { input: ApplyInventoryInput };
+        // The session id is the idempotency key: the server returns early
+        // once the session is closed, so stock is never corrected twice.
+        await remoteInventory.applyInventoryAdjustments(payload.input);
+        await markSynced(item.id);
+        return;
+      }
       case "receiveOrder": {
         const payload = item.payload as {
           orderId: string;
@@ -212,7 +273,7 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
       // sale reached the server — retrying changes nothing, so this is
       // a resolved conflict, not a transient failure. The conflict log is
       // where it stays visible.
-      const entityType = item.type === "createSale" ? "sale" : item.type === "receiveOrder" ? "order" : "product";
+      const entityType = ENTITY_TYPE_BY_OPERATION[item.type];
       await logConflict({
         entityType,
         entityId: item.entityId,

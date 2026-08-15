@@ -6,6 +6,7 @@ import { ReceiptSettingsForm } from "@/components/features/settings/receipt-sett
 import { InviteAssistantForm } from "@/components/features/auth/invite-assistant-form";
 import { ConflictLogView } from "@/components/features/offline/conflict-log-view";
 import { SyncQueueMaintenance } from "@/components/features/offline/sync-queue-maintenance";
+import { ProductResync } from "@/components/features/offline/product-resync";
 import {
   Card,
   CardContent,
@@ -82,6 +83,7 @@ export default async function ParametresPage() {
               sync badge is telling them something. */}
           <TabsContent value="hors-ligne" className="max-w-3xl space-y-sp-lg">
             <SyncQueueMaintenance />
+            <ProductResync />
             <ConflictLogView />
           </TabsContent>
         </Tabs>

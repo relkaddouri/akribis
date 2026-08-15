@@ -29,6 +29,9 @@ const OPERATION_LABELS: Record<SyncOperationType, string> = {
   updateProduct: "produit modifié",
   createProduct: "nouveau produit",
   receiveOrder: "réception de commande",
+  startInventory: "inventaire démarré",
+  recordInventoryCount: "comptage d'inventaire",
+  applyInventory: "ajustement d'inventaire",
 };
 
 function describe(item: OutstandingSyncItem): string {
