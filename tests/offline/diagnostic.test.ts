@@ -6,6 +6,7 @@ import { countPendingSyncItems } from "@/lib/offline/sync-queue";
 import { createProduct, updateProduct } from "@/lib/offline/products";
 import { createSale } from "@/lib/offline/sales";
 import { receiveOrder } from "@/lib/offline/orders";
+import type { ProductFormInput } from "@/lib/validations/products";
 
 /**
  * DIAGNOSTIC ONLY — not a regression suite.
@@ -132,10 +133,10 @@ vi.mock("@/lib/server/clients", () => ({
 }));
 
 vi.mock("@/lib/server/sales-returns", () => ({
-  createSaleReturn: vi.fn(async (input: { saleId: string }) => {
+  createSaleReturn: vi.fn(async (saleId: string) => {
     guard();
-    server.returns.push({ saleId: input.saleId });
-    return { id: crypto.randomUUID() };
+    server.returns.push({ saleId });
+    return { returnId: crypto.randomUUID(), totalRefund: 0 };
   }),
 }));
 
@@ -199,7 +200,7 @@ function seedProduct(overrides: Partial<LocalProduct> = {}): LocalProduct {
   return { ...makeRemoteProduct("p1"), syncStatus: "synced", quantityInStock: 5, ...overrides } as LocalProduct;
 }
 
-const productInput = {
+const productInput: ProductFormInput = {
   name: "Paracétamol 1g",
   form: "Comprimé",
   dosage: "",
@@ -312,7 +313,9 @@ describe("4-5-7-9-10. actions with no offline layer at all", () => {
     const { createSaleReturn } = await import("@/lib/server/sales-returns");
     setOnline(false);
 
-    await expect(createSaleReturn({ saleId: "sale-1" })).rejects.toThrow("Failed to fetch");
+    await expect(
+      createSaleReturn("sale-1", { lines: [], isLotRecall: false }),
+    ).rejects.toThrow("Failed to fetch");
     expect(await countPendingSyncItems()).toBe(0);
     expect(server.returns).toHaveLength(0);
   });
@@ -337,7 +340,9 @@ describe("4-5-7-9-10. actions with no offline layer at all", () => {
     const { createSupplierCredit, settleSupplierCredit } = await import("@/lib/server/supplier-credits");
     setOnline(false);
 
-    await expect(createSupplierCredit({})).rejects.toThrow("Failed to fetch");
+    await expect(
+      createSupplierCredit({ supplierId: "s1", motif: "autre", lines: [] }),
+    ).rejects.toThrow("Failed to fetch");
     await expect(settleSupplierCredit("credit-1", "especes")).rejects.toThrow("Failed to fetch");
     expect(await countPendingSyncItems()).toBe(0);
   });
@@ -407,10 +412,10 @@ describe("8. receiving a delivery", () => {
     // First attempt commits server-side, then the reply is lost — which
     // the engine sees as a connectivity error and retries forever.
     const orders = await import("@/lib/server/orders");
-    const real = orders.receiveOrder as unknown as ReturnType<typeof vi.fn>;
-    const once = real.getMockImplementation()!;
-    real.mockImplementationOnce(async (...args: unknown[]) => {
-      await once(...(args as Parameters<typeof once>));
+    const mocked = vi.mocked(orders.receiveOrder);
+    const commit = mocked.getMockImplementation()!;
+    mocked.mockImplementationOnce(async (orderId, input) => {
+      await commit(orderId, input);
       throw new OfflineFetchError();
     });
 
