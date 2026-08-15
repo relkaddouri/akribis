@@ -11,37 +11,39 @@ datasource db {
 }
 
 model Pharmacy {
-  id          String   @id @default(uuid())
-  name        String
-  address     String?
-  phone       String?
+  id              String   @id @default(uuid())
+  name            String
+  address         String?
+  phone           String?
   /// ICE (Identifiant Commun de l'Entreprise) — Moroccan business registry number.
-  ice         String?
-  orderNumber String?  @map("order_number")
-  logoUrl     String?  @map("logo_url")
+  ice             String?
+  orderNumber     String?  @map("order_number")
+  logoUrl         String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
-  receiptSettings Json? @map("receipt_settings")
+  receiptSettings Json?    @map("receipt_settings")
   /// Dirhams that earn one loyalty point. 1 means "1 DH = 1 point";
   /// raising it makes points scarcer. Never 0 — see lib/clients/account.ts.
-  loyaltyRate Decimal @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  loyaltyRate     Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
-  users          User[]
-  products       Product[]
-  stockMovements StockMovement[]
-  clients        Client[]
-  sales          Sale[]
-  saleItems      SaleItem[]
-  suppliers      Supplier[]
-  orders         Order[]
-  orderItems     OrderItem[]
-  invoices       Invoice[]
-  saleReturns    SaleReturn[]
+  users              User[]
+  products           Product[]
+  stockMovements     StockMovement[]
+  clients            Client[]
+  sales              Sale[]
+  saleItems          SaleItem[]
+  suppliers          Supplier[]
+  orders             Order[]
+  orderItems         OrderItem[]
+  invoices           Invoice[]
+  saleReturns        SaleReturn[]
   clientTransactions ClientTransaction[]
   clientReminders    ClientReminder[]
   deliveries         Delivery[]
   supplierCredits    SupplierCredit[]
+
+  inventorySessions InventorySession[]
 
   @@map("pharmacies")
 }
@@ -65,10 +67,11 @@ model User {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  sales    Sale[]
+  pharmacy            Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sales               Sale[]
   saleReturns         SaleReturn[]
   publicationLectures PublicationLecture[]
+  inventorySessions   InventorySession[]
 
   @@index([pharmacyId])
   @@map("users")
@@ -106,14 +109,15 @@ model Product {
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  pharmacy       Pharmacy        @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  stockMovements StockMovement[]
-  saleItems      SaleItem[]
-  orderItems     OrderItem[]
-  returnLines    SaleReturnLine[]
-  reminders      ClientReminder[]
-  deliveryItems  DeliveryItem[]
-  creditItems    SupplierCreditItem[]
+  pharmacy        Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  stockMovements  StockMovement[]
+  saleItems       SaleItem[]
+  orderItems      OrderItem[]
+  returnLines     SaleReturnLine[]
+  reminders       ClientReminder[]
+  deliveryItems   DeliveryItem[]
+  creditItems     SupplierCreditItem[]
+  inventoryCounts InventoryCount[]
 
   @@unique([pharmacyId, barcode])
   @@index([pharmacyId])
@@ -145,10 +149,10 @@ model StockMovement {
 }
 
 model Client {
-  id         String   @id @default(uuid())
-  pharmacyId String   @map("pharmacy_id")
-  name       String
-  phone      String?
+  id             String  @id @default(uuid())
+  pharmacyId     String  @map("pharmacy_id")
+  name           String
+  phone          String?
   /// Running account balance. NEGATIVE means the client owes the pharmacy
   /// (credit sale), POSITIVE means the pharmacy owes the client.
   ///
@@ -236,8 +240,8 @@ model ClientReminder {
 }
 
 enum PaymentMethod {
-  CASH @map("cash")
-  CARD @map("card")
+  CASH   @map("cash")
+  CARD   @map("card")
   /// Sale taken on account — settled later, and only allowed when a
   /// client is attached, since an anonymous walk-in has nobody to bill.
   CREDIT @map("credit")
@@ -264,12 +268,12 @@ model Sale {
   /// line of every sale.
   returnStatus SaleReturnStatus @default(NONE) @map("return_status")
 
-  pharmacy Pharmacy   @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  client   Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  user     User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
-  items    SaleItem[]
-  invoice  Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  returns  SaleReturn[]
+  pharmacy           Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  user               User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items              SaleItem[]
+  invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  returns            SaleReturn[]
   clientTransactions ClientTransaction[]
 
   @@index([pharmacyId])
@@ -280,19 +284,19 @@ model Sale {
 }
 
 model SaleItem {
-  id         String  @id @default(uuid())
-  pharmacyId String  @map("pharmacy_id")
-  saleId     String  @map("sale_id")
-  productId  String  @map("product_id")
-  quantity   Int
-  unitPrice  Decimal @map("unit_price") @db.Decimal(10, 2)
+  id               String  @id @default(uuid())
+  pharmacyId       String  @map("pharmacy_id")
+  saleId           String  @map("sale_id")
+  productId        String  @map("product_id")
+  quantity         Int
+  unitPrice        Decimal @map("unit_price") @db.Decimal(10, 2)
   /// Cumulative quantity returned so far across one or more returns —
   /// the cap that stops a line being refunded more than it was sold.
-  returnedQuantity Int @default(0) @map("returned_quantity")
+  returnedQuantity Int     @default(0) @map("returned_quantity")
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  product  Product  @relation(fields: [productId], references: [id])
+  pharmacy    Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  sale        Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product     Product          @relation(fields: [productId], references: [id])
   returnLines SaleReturnLine[]
 
   @@index([pharmacyId])
@@ -429,15 +433,15 @@ enum SupplierCreditCompensation {
 /// supplier compensated — decrementing again there would double-count.
 /// Enforced in lib/server/supplier-credits.ts.
 model SupplierCredit {
-  id         String                      @id @default(uuid())
-  pharmacyId String                      @map("pharmacy_id")
-  supplierId String                      @map("supplier_id")
+  id               String                      @id @default(uuid())
+  pharmacyId       String                      @map("pharmacy_id")
+  supplierId       String                      @map("supplier_id")
   /// The order the claim relates to, when it relates to one.
-  orderId    String?                     @map("order_id")
+  orderId          String?                     @map("order_id")
   /// Sequential per pharmacy, independent of orders and deliveries.
-  numero     Int
-  statut     SupplierCreditStatus        @default(EMIS)
-  motif      SupplierCreditMotif
+  numero           Int
+  statut           SupplierCreditStatus        @default(EMIS)
+  motif            SupplierCreditMotif
   /// Only meaningful once `statut` is RECU — how the supplier settled.
   modeCompensation SupplierCreditCompensation? @map("mode_compensation")
   montant          Decimal                     @db.Decimal(12, 2)
@@ -552,19 +556,19 @@ enum OutilAkribis {
 }
 
 model Publication {
-  id      String          @id @default(uuid())
-  titre   String
-  contenu String
-  type    PublicationType
+  id              String          @id @default(uuid())
+  titre           String
+  contenu         String
+  type            PublicationType
   /// Only meaningful when `type` is ALERTE — drives the badge colour.
-  niveauUrgence   NiveauUrgence? @map("niveau_urgence")
+  niveauUrgence   NiveauUrgence?  @map("niveau_urgence")
   /// Only meaningful when `type` is ANNONCE_SUITE — which companion product the announcement is about.
-  outilAssocie    OutilAkribis?  @map("outil_associe")
-  imageUrl        String?        @map("image_url")
-  datePublication DateTime       @default(now()) @map("date_publication")
-  auteur          String         @default("Équipe Akribis")
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
+  outilAssocie    OutilAkribis?   @map("outil_associe")
+  imageUrl        String?         @map("image_url")
+  datePublication DateTime        @default(now()) @map("date_publication")
+  auteur          String          @default("Équipe Akribis")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
 
   lectures PublicationLecture[]
 
@@ -588,7 +592,6 @@ model PublicationLecture {
   @@index([publicationId])
   @@map("publication_lectures")
 }
-
 
 enum InvoiceStatus {
   ISSUED    @map("issued")
@@ -654,8 +657,8 @@ model Invoice {
 }
 
 model InvoiceLine {
-  id        String  @id @default(uuid())
-  invoiceId String  @map("invoice_id")
+  id          String  @id @default(uuid())
+  invoiceId   String  @map("invoice_id")
   /// Nullable on purpose: the product may be deleted later; `designation`
   /// is the snapshot that keeps the invoice readable regardless.
   productId   String? @map("product_id")
@@ -663,17 +666,16 @@ model InvoiceLine {
   quantity    Int
   unitPriceHt Decimal @map("unit_price_ht") @db.Decimal(10, 2)
   /// VAT percentage applied to this line, snapshotted from the product.
-  tvaRate  Decimal @map("tva_rate") @db.Decimal(5, 2)
-  totalHt  Decimal @map("total_ht") @db.Decimal(12, 2)
-  totalTva Decimal @map("total_tva") @db.Decimal(12, 2)
-  totalTtc Decimal @map("total_ttc") @db.Decimal(12, 2)
+  tvaRate     Decimal @map("tva_rate") @db.Decimal(5, 2)
+  totalHt     Decimal @map("total_ht") @db.Decimal(12, 2)
+  totalTva    Decimal @map("total_tva") @db.Decimal(12, 2)
+  totalTtc    Decimal @map("total_ttc") @db.Decimal(12, 2)
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
   @@map("invoice_lines")
 }
-
 
 enum SaleReturnStatus {
   NONE    @map("none")
@@ -717,18 +719,18 @@ model SaleReturn {
 }
 
 model SaleReturnLine {
-  id         String @id @default(uuid())
-  returnId   String @map("return_id")
-  saleItemId String @map("sale_item_id")
-  productId  String @map("product_id")
-  quantity   Int
+  id           String  @id @default(uuid())
+  returnId     String  @map("return_id")
+  saleItemId   String  @map("sale_item_id")
+  productId    String  @map("product_id")
+  quantity     Int
   /// Snapshot of the price refunded per unit.
   unitPrice    Decimal @map("unit_price") @db.Decimal(10, 2)
   refundAmount Decimal @map("refund_amount") @db.Decimal(12, 2)
   /// Decided per line, per return: false means the goods were destroyed
   /// rather than put back on the shelf (recalled or unsellable batches),
   /// so no stock is credited but the movement stays on record.
-  restocked Boolean @default(true)
+  restocked    Boolean @default(true)
 
   saleReturn SaleReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
   saleItem   SaleItem   @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
@@ -738,4 +740,55 @@ model SaleReturnLine {
   @@index([saleItemId])
   @@index([productId])
   @@map("sale_return_lines")
+}
+
+enum InventorySessionStatus {
+  EN_COURS @map("en_cours")
+  TERMINE  @map("termine")
+
+  @@map("inventory_session_status")
+}
+
+/// A stock count in progress or finished. The id is generated by the
+/// client when the session is queued offline, which is what makes a
+/// replayed sync a no-op rather than a second session.
+model InventorySession {
+  id         String                 @id @default(uuid())
+  pharmacyId String                 @map("pharmacy_id")
+  userId     String?                @map("user_id")
+  statut     InventorySessionStatus @default(EN_COURS)
+  dateDebut  DateTime               @default(now()) @map("date_debut")
+  /// Null until the adjustments are applied.
+  dateFin    DateTime?              @map("date_fin")
+  createdAt  DateTime               @default(now()) @map("created_at")
+
+  pharmacy Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  user     User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  counts   InventoryCount[]
+
+  @@index([pharmacyId, dateDebut])
+  @@map("inventory_sessions")
+}
+
+model InventoryCount {
+  id                String    @id @default(uuid())
+  sessionId         String    @map("session_id")
+  productId         String    @map("product_id")
+  /// Stock as it stood when the product was added to the session. Frozen
+  /// on purpose: recomputing it at sync time would silently erase the very
+  /// discrepancy the count exists to reveal.
+  quantiteTheorique Int       @map("quantite_theorique")
+  /// Null until someone actually counts the shelf.
+  quantiteComptee   Int?      @map("quantite_comptee")
+  dateComptage      DateTime? @map("date_comptage")
+
+  session InventorySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  product Product          @relation(fields: [productId], references: [id])
+
+  /// One line per product per session — this is also what makes a replayed
+  /// count an update rather than a duplicate row.
+  @@unique([sessionId, productId])
+  @@index([sessionId])
+  @@index([productId])
+  @@map("inventory_counts")
 }

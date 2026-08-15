@@ -9,6 +9,7 @@ export const INVOICES_PATH = "/factures";
 export const SALES_PATH = "/ventes";
 export const REMINDERS_PATH = "/rappels";
 export const ORDERS_PATH = "/commandes";
+export const INVENTORY_PATH = "/inventaire";
 export const FORGOT_PASSWORD_PATH = "/mot-de-passe-oublie";
 /**
  * Deliberately NOT in GUEST_ONLY_PATHS below: completing a password
@@ -31,6 +32,7 @@ export const PROTECTED_PREFIXES = [
   SALES_PATH,
   REMINDERS_PATH,
   ORDERS_PATH,
+  INVENTORY_PATH,
 ] as const;
 
 /** Pages only meant for signed-out visitors (login, signup). */

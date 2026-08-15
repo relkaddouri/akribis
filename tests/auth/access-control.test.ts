@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canAccess,
   isOwnerOnlyPath,
+  isProtectedPath,
   resolveAuthRedirect,
 } from "@/lib/auth/access-control";
 
@@ -116,5 +117,27 @@ describe("resolveAuthRedirect", () => {
     expect(
       resolveAuthRedirect({ pathname: "/", isAuthenticated: false, role: null }),
     ).toBeNull();
+  });
+});
+
+describe("inventory routes", () => {
+  /**
+   * The layout's requireUser() would bounce a signed-out visitor anyway,
+   * but the middleware has to know about the route too: that is the layer
+   * that redirects before any server component runs, and every other
+   * module is listed there.
+   */
+  it("requires a session, like every other module", () => {
+    expect(isProtectedPath("/inventaire")).toBe(true);
+    expect(isProtectedPath("/inventaire/session-1")).toBe(true);
+    expect(canAccess(null, "/inventaire")).toBe(false);
+  });
+
+  it("is open to assistants as well as owners", () => {
+    // Counting shelves is exactly the kind of work an assistant does; only
+    // settings and financial statistics are owner-only.
+    expect(canAccess("assistant", "/inventaire")).toBe(true);
+    expect(canAccess("owner", "/inventaire")).toBe(true);
+    expect(isOwnerOnlyPath("/inventaire")).toBe(false);
   });
 });

@@ -24,6 +24,13 @@ export function backoffDelayMs(attempts: number): number {
   return Math.min(BASE_BACKOFF_MS * 2 ** (attempts - 1), MAX_BACKOFF_MS);
 }
 
+/**
+ * Insertion counter, so items queued within the same millisecond keep the
+ * order they were written in. Module-level and therefore reset on reload —
+ * harmless, since anything queued after a reload has a later `createdAt`.
+ */
+let insertionSeq = 0;
+
 /** Statuses that mean "still owed to the server". */
 const UNSETTLED: SyncQueueItem["status"][] = ["pending", "syncing", "failed"];
 
@@ -43,6 +50,7 @@ export async function enqueue(entry: {
     attempts: 0,
     lastError: null,
     createdAt: new Date(),
+    seq: (insertionSeq += 1),
   };
   await getDb().syncQueue.add(item);
   return item;
@@ -62,7 +70,7 @@ export async function listPendingSyncItems(now: Date = new Date()): Promise<Sync
   const items = await getDb().syncQueue.where("status").anyOf(["pending", "failed"]).toArray();
   return items
     .filter((item) => !item.nextAttemptAt || item.nextAttemptAt.getTime() <= now.getTime())
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    .sort(byInsertionOrder);
 }
 
 export type OutstandingSyncItem = SyncQueueItem & {
@@ -80,7 +88,7 @@ export async function listOutstandingSyncItems(): Promise<OutstandingSyncItem[]>
   const items = await getDb().syncQueue.where("status").anyOf(UNSETTLED).toArray();
   return items
     .map((item) => ({ ...item, isStalled: item.attempts >= MAX_SYNC_ATTEMPTS }))
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    .sort(byInsertionOrder);
 }
 
 /** Everything still owed to the server, whether or not it is due right now. */
@@ -140,4 +148,10 @@ export async function discardStalledSyncItems(): Promise<OutstandingSyncItem[]> 
   if (stalled.length === 0) return [];
   await getDb().syncQueue.bulkDelete(stalled.map((item) => item.id));
   return stalled;
+}
+
+/** Strict FIFO: by timestamp, then by insertion order within the millisecond. */
+function byInsertionOrder(a: SyncQueueItem, b: SyncQueueItem): number {
+  const byTime = a.createdAt.getTime() - b.createdAt.getTime();
+  return byTime !== 0 ? byTime : (a.seq ?? 0) - (b.seq ?? 0);
 }

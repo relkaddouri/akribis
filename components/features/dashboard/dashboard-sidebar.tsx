@@ -54,11 +54,7 @@ const MENU_ITEMS: NavItem[] = [
   { label: "Factures", href: "/factures", icon: FileText },
 ];
 
-/**
- * Not yet built (no route) — rendered disabled, same as before. Kept in
- * the Menu section so the existing order is preserved.
- */
-const INVENTORY_ITEM = { label: "Inventaire", icon: Boxes };
+const INVENTORY_ITEM: NavItem = { label: "Inventaire", href: "/inventaire", icon: Boxes };
 
 const REPORTS_ITEM: NavItem = { label: "Rapports", href: "/dashboard/stats", icon: BarChart3 };
 
@@ -382,9 +378,9 @@ export function DashboardSidebar({
                 active={isActivePath(pathname, REMINDERS_PATH)}
                 collapsed={collapsed}
               />
-              <SidebarPlaceholderItem
-                label={INVENTORY_ITEM.label}
-                icon={INVENTORY_ITEM.icon}
+              <SidebarLink
+                item={INVENTORY_ITEM}
+                active={isActivePath(pathname, INVENTORY_ITEM.href)}
                 collapsed={collapsed}
               />
               {role === "owner" && (
