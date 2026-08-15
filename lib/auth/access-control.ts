@@ -10,6 +10,8 @@ export const SALES_PATH = "/ventes";
 export const REMINDERS_PATH = "/rappels";
 export const ORDERS_PATH = "/commandes";
 export const INVENTORY_PATH = "/inventaire";
+/** Shown when the middleware finds the app misconfigured. Never protected. */
+export const CONFIG_ERROR_PATH = "/erreur-configuration";
 export const FORGOT_PASSWORD_PATH = "/mot-de-passe-oublie";
 /**
  * Deliberately NOT in GUEST_ONLY_PATHS below: completing a password

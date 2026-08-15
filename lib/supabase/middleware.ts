@@ -2,7 +2,28 @@ import { createServerClient } from "@supabase/ssr";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionRoleFromUser } from "@/lib/auth/roles";
-import { resolveAuthRedirect } from "@/lib/auth/access-control";
+import { CONFIG_ERROR_PATH, resolveAuthRedirect } from "@/lib/auth/access-control";
+
+/**
+ * Environment variables the middleware cannot work without.
+ *
+ * `NEXT_PUBLIC_*` values are inlined into the bundle at build time, so a
+ * missing one is not something the running server can recover from — it is
+ * baked in as `undefined`, and `createServerClient` throws on every single
+ * request. That surfaced as MIDDLEWARE_INVOCATION_FAILED on every page,
+ * with no clue as to which variable was at fault.
+ */
+export function missingSupabaseConfig(env: {
+  url: string | undefined;
+  anonKey: string | undefined;
+}): string[] {
+  const missing: string[] = [];
+  // Empty strings count: a variable set to "" in a dashboard is a far more
+  // common mistake than one that is genuinely absent.
+  if (!env.url?.trim()) missing.push("NEXT_PUBLIC_SUPABASE_URL");
+  if (!env.anonKey?.trim()) missing.push("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  return missing;
+}
 
 /**
  * Refreshes the Supabase session cookies on every request and redirects
@@ -11,11 +32,31 @@ import { resolveAuthRedirect } from "@/lib/auth/access-control";
  * before the redirect happens.
  */
 export async function updateSession(request: NextRequest) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  const missing = missingSupabaseConfig({ url, anonKey });
+  if (missing.length > 0) {
+    // Already on the error page: letting it through, or the redirect below
+    // would bounce the page against itself for ever.
+    if (request.nextUrl.pathname.startsWith(CONFIG_ERROR_PATH)) {
+      return NextResponse.next({ request });
+    }
+    console.error(
+      `[middleware] Configuration incomplète — variable(s) manquante(s) : ${missing.join(", ")}. ` +
+        "Les variables NEXT_PUBLIC_* sont figées au build : redéployez après les avoir ajoutées.",
+    );
+    const configErrorUrl = request.nextUrl.clone();
+    configErrorUrl.pathname = CONFIG_ERROR_PATH;
+    configErrorUrl.search = "";
+    return NextResponse.redirect(configErrorUrl);
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url!,
+    anonKey!,
     {
       cookies: {
         getAll() {
