@@ -20,11 +20,108 @@
  * every cache that doesn't carry the current version.
  *
  * v4: designer-supplied favicon replaces the flat mark in the tab.
+ * v5: client-side navigations warm the page cache; LRU cap on stored pages.
+ * v6: index updates serialised — concurrent prefetches were losing entries.
  */
-const VERSION = "v4";
+const VERSION = "v6";
 const STATIC_CACHE = `akribis-static-${VERSION}`;
 const PAGES_CACHE = `akribis-pages-${VERSION}`;
 const OFFLINE_URL = "/offline";
+
+/**
+ * How many page documents to keep. Every route the pharmacist visits is
+ * warmed, order and sale detail pages included, so without a ceiling the
+ * cache grows for ever on a till that runs all day.
+ */
+const PAGE_CACHE_LIMIT = 50;
+
+/**
+ * How long a warmed copy is considered good enough. Re-warming a page on
+ * every single navigation would double the requests on a slow counter
+ * connection for no benefit.
+ */
+const WARM_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Recency and freshness live in one entry rather than being inferred from
+ * the Cache API, which exposes neither. Stored inside the page cache under
+ * a URL no route can collide with.
+ */
+const INDEX_URL = "/__akribis_page_index__";
+
+/**
+ * Index updates run one at a time.
+ *
+ * Next prefetches every `<Link>` in view, so several warms fire at once and
+ * each one read the index, appended to it and wrote it back — a textbook
+ * lost update. Observed in a browser: three pages cached, only two of them
+ * listed. An unlisted page is never evicted and never looks fresh, so the
+ * LRU ceiling silently stops holding.
+ */
+let indexWrites = Promise.resolve();
+
+function serialised(work) {
+  const next = indexWrites.then(work, work);
+  // Swallow here only: the caller still gets the real result below.
+  indexWrites = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+async function readIndex(cache) {
+  try {
+    const stored = await cache.match(INDEX_URL);
+    if (!stored) return [];
+    const parsed = await stored.json();
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    // A half-written index must not take the whole cache down with it.
+    return [];
+  }
+}
+
+async function writeIndex(cache, entries) {
+  await cache.put(
+    INDEX_URL,
+    new Response(JSON.stringify(entries), { headers: { "content-type": "application/json" } }),
+  );
+}
+
+/**
+ * Marks a page as just used and evicts the least recently used ones past
+ * the cap. Order in the array *is* the recency order: the last entry is
+ * the freshest, so the overflow always comes off the front.
+ */
+function touchPage(cache, url) {
+  return serialised(async () => {
+    const entries = (await readIndex(cache)).filter((entry) => entry.url !== url);
+    entries.push({ url, at: Date.now() });
+
+    const overflow = entries.length - PAGE_CACHE_LIMIT;
+    if (overflow > 0) {
+      for (const stale of entries.splice(0, overflow)) {
+        await cache.delete(stale.url);
+      }
+    }
+
+    await writeIndex(cache, entries);
+  });
+}
+
+function dropFromIndex(cache, url) {
+  return serialised(async () => {
+    const entries = await readIndex(cache);
+    const remaining = entries.filter((entry) => entry.url !== url);
+    if (remaining.length !== entries.length) await writeIndex(cache, remaining);
+  });
+}
+
+async function pageAge(cache, url) {
+  const entry = (await readIndex(cache)).find((candidate) => candidate.url === url);
+  return entry ? Date.now() - entry.at : Infinity;
+}
 
 /**
  * Fetched at install time so the fallback exists before the first
@@ -139,9 +236,11 @@ function staleWhileRevalidate(event) {
         // on the next offline visit, so the stale copy is dropped instead.
         if (response.redirected || !response.ok) {
           await cache.delete(request);
+          await dropFromIndex(cache, request.url);
           return response;
         }
         await cache.put(request, response.clone());
+        await touchPage(cache, request.url);
         return response;
       })
       .catch(async () => {
@@ -172,6 +271,38 @@ function staleWhileRevalidate(event) {
   })();
 }
 
+/**
+ * Fetches the HTML document behind a route a client-side navigation just
+ * displayed, so a later reload or offline visit has something to serve.
+ *
+ * Skipped when a recent copy is already stored: warming on every
+ * navigation would double the requests on a slow counter connection.
+ */
+async function warmDocument(rscUrl) {
+  const target = new URL(rscUrl.href);
+  // `_rsc` is a per-navigation cache-buster; the document lives at the
+  // bare path, and that is the key the navigation handler will look up.
+  target.searchParams.delete("_rsc");
+
+  const cache = await caches.open(PAGES_CACHE);
+  if ((await pageAge(cache, target.href)) < WARM_MAX_AGE_MS) return;
+
+  try {
+    const response = await fetch(target.href, {
+      headers: { Accept: "text/html" },
+      credentials: "same-origin",
+    });
+    // Same rule as the navigation handler: a redirect means the session
+    // ended, and storing the login page under a dashboard URL would show
+    // the wrong screen on the next offline visit.
+    if (!response.ok || response.redirected) return;
+    await cache.put(target.href, response.clone());
+    await touchPage(cache, target.href);
+  } catch {
+    // Offline, or the route is gone. Nothing to warm, nothing to report.
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
@@ -192,8 +323,17 @@ self.addEventListener("fetch", (event) => {
    * more useful: Next reacts to a failed RSC fetch by falling back to a
    * full page load, which comes back through this worker as a navigation
    * and is served from the page cache below.
+   *
+   * But a client-side navigation only ever produces one of these — the
+   * document is never requested — so clicking through the sidebar left
+   * nothing behind, and those pages were unavailable offline even though
+   * they had just been read. Every RSC request therefore warms the
+   * document for the same route, in the background.
    */
-  if (request.headers.get("RSC") === "1" || url.searchParams.has("_rsc")) return;
+  if (request.headers.get("RSC") === "1" || url.searchParams.has("_rsc")) {
+    event.waitUntil(warmDocument(url));
+    return;
+  }
 
   if (isStaticAsset(url)) {
     event.respondWith(cacheFirst(request));
