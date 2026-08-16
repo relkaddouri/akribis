@@ -10,6 +10,7 @@
     "seed:publications": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed-publications.ts",
     "migrate:catalogue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/migrate-catalogue.ts",
     "verify:catalogue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/verify-catalogue.ts",
+    "admin:promote": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/promote-admin.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

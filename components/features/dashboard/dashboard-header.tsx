@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ArrowLeft, Bell, ChevronDown, LogOut, Settings, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, LogOut, Settings, ShieldCheck, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSyncStatus } from "@/components/features/offline/use-sync-status";
 import { syncStatusLabel } from "@/lib/offline/sync-engine";
@@ -25,7 +25,16 @@ import { clearRememberedCounts } from "@/lib/offline/last-known-counts";
 const ROLE_LABELS: Record<string, string> = {
   owner: "Titulaire",
   assistant: "Assistant",
+  admin_akribis: "Équipe Akribis",
 };
+
+/**
+ * Which space the header sits in. The two share the band, the card, the
+ * icon chip and the user menu; what differs is what a pharmacy has and
+ * Akribis staff don't — the offline sync queue is keyed by pharmacy, and
+ * the actualités feed is something they publish rather than read.
+ */
+export type HeaderSpace = "pharmacy" | "admin";
 
 const SYNC_ITEM_LABELS: Record<SyncOperationType, string> = {
   createSale: "vente",
@@ -190,7 +199,7 @@ async function handleSignOut() {
   await signOutAction();
 }
 
-function UserMenu() {
+function UserMenu({ space }: { space: HeaderSpace }) {
   const user = useDashboardUser();
   const displayName = user.name ?? user.email;
 
@@ -215,7 +224,7 @@ function UserMenu() {
           <span className="block text-xs font-normal text-muted-foreground">{user.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {user.role === "owner" && (
+        {space === "pharmacy" && user.role === "owner" && (
           <DropdownMenuItem asChild>
             <Link href="/parametres">
               <Settings /> Paramètres du compte
@@ -238,6 +247,7 @@ export function DashboardHeader({
   backLabel,
   actions,
   hasUnreadNews = false,
+  space = "pharmacy",
 }: {
   title: string;
   /** Secondary line under the title — a phone number, an order date, ... */
@@ -260,7 +270,10 @@ export function DashboardHeader({
   /** Page-specific controls, e.g. a "Nouvelle commande" button. */
   actions?: React.ReactNode;
   hasUnreadNews?: boolean;
+  /** Defaults to the pharmacy; "admin" drops the pharmacy-only controls. */
+  space?: HeaderSpace;
 }) {
+  const isAdmin = space === "admin";
   return (
     /* Sticky band rather than a bare sticky card. The band is opaque
        (`bg-background`) and bleeds past the content wrapper's horizontal
@@ -304,9 +317,21 @@ export function DashboardHeader({
 
         <div className="ml-auto flex shrink-0 items-center gap-sp-md">
           {actions}
-          <SyncStatusMenu />
-          <NotificationsBell hasUnread={hasUnreadNews} />
-          <UserMenu />
+          {isAdmin ? (
+            /* Not decoration: the one cue telling whoever is at the keyboard
+               that edits here land in every pharmacy's catalogue, not in one
+               officine's stock. */
+            <span className="hidden items-center gap-sp-xs rounded-lg bg-accent px-sp-sm py-1 text-xs font-medium text-primary sm:inline-flex">
+              <ShieldCheck className="size-3.5" strokeWidth={2} aria-hidden />
+              Espace Akribis
+            </span>
+          ) : (
+            <>
+              <SyncStatusMenu />
+              <NotificationsBell hasUnread={hasUnreadNews} />
+            </>
+          )}
+          <UserMenu space={space} />
         </div>
       </div>
     </div>
