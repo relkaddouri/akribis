@@ -45,6 +45,8 @@ model Pharmacy {
 
   inventorySessions InventorySession[]
 
+  pharmacyStock PharmacyStock[]
+
   @@map("pharmacies")
 }
 
@@ -317,6 +319,8 @@ model Supplier {
   pharmacy Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   orders   Order[]
   credits  SupplierCredit[]
+
+  pharmacyStock PharmacyStock[]
 
   @@index([pharmacyId])
   @@map("suppliers")
@@ -791,4 +795,183 @@ model InventoryCount {
   @@index([sessionId])
   @@index([productId])
   @@map("inventory_counts")
+}
+
+// ---------------------------------------------------------------------------
+// Catalogue Produits — PRD "Akribis — Catalogue Produits" v1.0, section 5.
+//
+// Le produit est scindé en trois niveaux, conformément à la section 4 : ce qui
+// est vrai partout au Maroc (CatalogueProduit), ce qui appartient à une
+// officine (PharmacyStock), et ce qui appartient à une réception précise
+// (ProductLot).
+//
+// Ces tables vivent EN PARALLÈLE de `products`, qui reste la source de vérité
+// du code applicatif à ce stade. Voir docs/migration-catalogue.md.
+// ---------------------------------------------------------------------------
+
+/// Section 5.1 — « Catégorie ». À ne pas confondre avec la classe
+/// thérapeutique : celle-ci dit à quoi le produit sert, celle-là ce qu'il est
+/// juridiquement — et détermine le taux de TVA (7 % médicament, 20 % para).
+enum ProduitCategorie {
+  PHARMACEUTIQUE     @map("pharmaceutique")
+  PARAPHARMACEUTIQUE @map("parapharmaceutique")
+  DISPOSITIF_MEDICAL @map("dispositif_medical")
+
+  @@map("produit_categorie")
+}
+
+/// Section 3.2 — tableaux des substances vénéneuses (classification légale
+/// marocaine). `AUCUN` couvre la délivrance libre.
+enum TableauSubstance {
+  AUCUN @map("aucun")
+  A     @map("a")
+  B     @map("b")
+  C     @map("c")
+
+  @@map("tableau_substance")
+}
+
+/// Niveau national, maintenu par Akribis. Volontairement SANS `pharmacyId` :
+/// une seule ligne par produit, partagée par toutes les officines — c'est tout
+/// l'objet du PRD.
+model CatalogueProduit {
+  id String @id @default(uuid())
+
+  // --- Identification et classification (5.1) ---
+  nom                   String
+  /// CBO/CIP 13 chiffres (médicament) ou EAN-13/UPC (parapharmacie). Unique au
+  /// niveau national : c'est l'identifiant qui empêche deux fiches pour le
+  /// même produit. Nul tant qu'un produit n'en a pas — la parapharmacie
+  /// n'a pas de code national.
+  codeBarres            String?           @unique @map("code_barres")
+  /// Absent de la liste 5.1, où le dosage fait partie du « Nom ». Conservé
+  /// parce que `products.dosage` existe déjà et que le référentiel CNOPS le
+  /// fournit séparément (DOSAGE1/UNITE_DOSAGE1) — le fusionner dans le nom
+  /// perdrait de l'information à la migration.
+  dosage                String?
+  photoUrl              String?           @map("photo_url")
+  /// Nul pour les produits migrés depuis `products`, où l'information
+  /// n'existait pas : « à classer » plutôt qu'une valeur inventée dont
+  /// dépendrait le taux de TVA.
+  categorie             ProduitCategorie?
+  classeTherapeutique   String?           @map("classe_therapeutique")
+  formeGalenique        String            @map("forme_galenique")
+  dci                   String?
+  laboratoire           String?
+  produitTableau        TableauSubstance  @default(AUCUN) @map("produit_tableau")
+  gamme                 String?
+  sousGamme             String?           @map("sous_gamme")
+  necessitePrescription Boolean           @default(false) @map("necessite_prescription")
+  /// Statut réglementaire national : le produit est-il encore autorisé à la
+  /// vente au Maroc. Distinct de `actifLocalement` côté officine.
+  produitCommercialise  Boolean           @default(true) @map("produit_commercialise")
+  groupeProduits        String?           @map("groupe_produits")
+  /// Retrait du catalogue sans suppression — la traçabilité impose de garder
+  /// la ligne, référencée par des ventes passées.
+  actifCatalogue        Boolean           @default(true) @map("actif_catalogue")
+  refrigerationRequise  Boolean           @default(false) @map("refrigeration_requise")
+
+  // --- Prix et fiscalité (5.1), non modifiables par la pharmacie ---
+  pph                   Decimal? @db.Decimal(10, 2)
+  ppv                   Decimal? @db.Decimal(10, 2)
+  /// PRIX_BR du référentiel CNOPS — un montant, pas un taux.
+  prixBaseRemboursement Decimal? @map("prix_base_remboursement") @db.Decimal(10, 2)
+  tvaAchat              Decimal? @map("tva_achat") @db.Decimal(5, 2)
+  tvaVente              Decimal? @map("tva_vente") @db.Decimal(5, 2)
+  remboursable          Boolean  @default(false)
+  /// « Base de remboursement (%) » — un taux (70 ou 0 dans le CNOPS 2014),
+  /// à ne pas confondre avec `prixBaseRemboursement` ci-dessus.
+  tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+
+  // --- Informations descriptives (5.1) ---
+  description                 String?
+  excipients                  String?
+  posologieAdulte             String? @map("posologie_adulte")
+  posologieEnfant             String? @map("posologie_enfant")
+  indications                 String?
+  /// Trois champs distincts, comme le demande le PRD : une contre-indication
+  /// à la conduite ne se déduit pas d'une contre-indication à la grossesse.
+  contreIndicationConduite    String? @map("contre_indication_conduite")
+  contreIndicationAllaitement String? @map("contre_indication_allaitement")
+  contreIndicationGrossesse   String? @map("contre_indication_grossesse")
+  referenceLabo               String? @map("reference_labo")
+  conditionnement             String?
+  monographie                 String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  stocks PharmacyStock[]
+
+  @@index([nom])
+  @@index([dci])
+  @@index([laboratoire])
+  @@map("catalogue_produits")
+}
+
+/// Section 5.2 — ce qu'une officine ajoute par-dessus une fiche catalogue.
+model PharmacyStock {
+  id                 String @id @default(uuid())
+  pharmacyId         String @map("pharmacy_id")
+  catalogueProduitId String @map("catalogue_produit_id")
+
+  /// Grossiste-répartiteur choisi par CETTE pharmacie pour CE produit.
+  supplierId       String?  @map("supplier_id")
+  stockMinimum     Int      @default(0) @map("stock_minimum")
+  stockMaximum     Int?     @map("stock_maximum")
+  dateAjout        DateTime @default(now()) @map("date_ajout")
+  referenceInterne String?  @map("reference_interne")
+  localisation     String?
+  actifLocalement  Boolean  @default(true) @map("actif_localement")
+  /// Parapharmacie uniquement : sans prix réglementé, le titulaire fixe son
+  /// prix de vente librement.
+  margeLibre       Decimal? @map("marge_libre") @db.Decimal(10, 2)
+  /// Absent de la liste 5.2, mais imposé par la section 9 : le prix d'achat
+  /// réellement facturé est propre à l'officine et doit être distingué du
+  /// PPH/PPV réglementés du catalogue. Sans ce champ, `products.purchasePrice`
+  /// serait perdu à la migration et le calcul de marge cesserait de
+  /// fonctionner.
+  prixAchat        Decimal? @map("prix_achat") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy  Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  catalogue CatalogueProduit @relation(fields: [catalogueProduitId], references: [id])
+  supplier  Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  lots      ProductLot[]
+
+  /// Une officine ne référence un produit catalogue qu'une fois — les
+  /// quantités multiples vivent dans les lots, pas dans des lignes en double.
+  @@unique([pharmacyId, catalogueProduitId])
+  @@index([pharmacyId])
+  @@index([catalogueProduitId])
+  @@map("pharmacy_stock")
+}
+
+/// Section 5.3 — une ligne par réception. La quantité totale d'un produit dans
+/// une officine est la somme des lots actifs : le PRD précise qu'elle est
+/// « dérivée, jamais saisie directement », d'où l'absence délibérée d'une
+/// colonne quantité sur PharmacyStock.
+model ProductLot {
+  id              String @id @default(uuid())
+  pharmacyStockId String @map("pharmacy_stock_id")
+
+  /// Lu au Datamatrix à la réception. Nul pour les lignes issues de la
+  /// migration : l'historique des lots réels n'existe pas avant celle-ci.
+  numeroLot      String?   @map("numero_lot")
+  quantite       Int       @default(0)
+  /// Propre au lot — base du tri FEFO et des alertes 90/60/30 jours.
+  datePeremption DateTime? @map("date_peremption")
+  dateReception  DateTime  @default(now()) @map("date_reception")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacyStock PharmacyStock @relation(fields: [pharmacyStockId], references: [id], onDelete: Cascade)
+
+  @@index([pharmacyStockId])
+  /// Le tri FEFO lit cet index.
+  @@index([datePeremption])
+  @@map("product_lots")
 }
