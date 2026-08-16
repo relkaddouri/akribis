@@ -24,9 +24,11 @@ import {
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BrandLogo } from "@/components/ui/brand-logo";
 import type { Role } from "@/lib/auth/roles";
 import { ThemeToggle } from "@/components/features/dashboard/theme-toggle";
 import { GlobalSearch } from "@/components/features/dashboard/global-search";
+import { useDashboardCounts } from "@/components/features/dashboard/use-dashboard-counts";
 import { SIDEBAR_COLLAPSED_COOKIE } from "@/components/features/dashboard/sidebar-cookie";
 import {
   AKRIBIS_TOOLS,
@@ -52,11 +54,7 @@ const MENU_ITEMS: NavItem[] = [
   { label: "Factures", href: "/factures", icon: FileText },
 ];
 
-/**
- * Not yet built (no route) — rendered disabled, same as before. Kept in
- * the Menu section so the existing order is preserved.
- */
-const INVENTORY_ITEM = { label: "Inventaire", icon: Boxes };
+const INVENTORY_ITEM: NavItem = { label: "Inventaire", href: "/inventaire", icon: Boxes };
 
 const REPORTS_ITEM: NavItem = { label: "Rapports", href: "/dashboard/stats", icon: BarChart3 };
 
@@ -241,18 +239,16 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function DashboardSidebar({
   role,
   defaultCollapsed = false,
-  unreadNewsCount = 0,
-  dueRemindersCount = 0,
 }: {
   role: Role;
   defaultCollapsed?: boolean;
-  /** Unread "Akribis actualités" publications. */
-  unreadNewsCount?: number;
-  /** Reminders due today or already late — the ones needing a call now. */
-  dueRemindersCount?: number;
 }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  // Fetched here rather than handed down by the layout: the shell must be
+  // able to render from cache with no network, which it could not do while
+  // these two numbers were awaited server-side on every navigation.
+  const { unreadNews: unreadNewsCount, dueReminders: dueRemindersCount } = useDashboardCounts();
 
   function setCollapsedAndPersist(next: boolean) {
     setCollapsed(next);
@@ -271,17 +267,24 @@ export function DashboardSidebar({
     <TooltipProvider delayDuration={200}>
       <aside
         className={cn(
-          "flex h-svh shrink-0 flex-col bg-card transition-[width] duration-200 ease-in-out print:hidden",
+          // Same card treatment as DashboardHeader — rounded-xl, bg-card,
+          // shadow-soft — so the two surfaces read as one system. Height
+          // comes from the wrapper stretching it, not h-svh, which would
+          // overflow now that the wrapper adds vertical padding.
+          "flex shrink-0 flex-col overflow-hidden rounded-xl bg-card shadow-soft",
+          "transition-[width] duration-200 ease-in-out print:hidden",
           collapsed ? "w-16" : "w-64",
         )}
       >
-        <div className={cn("flex items-center gap-sp-sm pt-sp-lg pb-sp-md", collapsed ? "justify-center px-sp-sm" : "px-sp-md")}>
-          <Image src="/icon.svg" alt="" width={40} height={40} className="size-10 shrink-0" />
-          {!collapsed && (
-            <div className="flex-1 leading-tight">
-              <span className="block font-heading text-lg font-semibold text-foreground">Akribis</span>
-              <span className="block text-xs text-muted-foreground">Pharma</span>
-            </div>
+        <div className={cn("flex items-center gap-sp-sm pt-sp-md pb-sp-md", collapsed ? "justify-center px-sp-sm" : "px-sp-md")}>
+          {/* Collapsed there is no room for the lockup, and the mark alone
+              is what the 64px rail can hold. Expanded, the logo already
+              carries "akribis Pharma", so the text beside it would be a
+              second copy of the same words. */}
+          {collapsed ? (
+            <Image src="/icon.svg" alt="Akribis" width={40} height={40} className="size-10 shrink-0" />
+          ) : (
+            <BrandLogo height={34} className="flex-1" />
           )}
           {!collapsed && (
             <button
@@ -375,9 +378,9 @@ export function DashboardSidebar({
                 active={isActivePath(pathname, REMINDERS_PATH)}
                 collapsed={collapsed}
               />
-              <SidebarPlaceholderItem
-                label={INVENTORY_ITEM.label}
-                icon={INVENTORY_ITEM.icon}
+              <SidebarLink
+                item={INVENTORY_ITEM}
+                active={isActivePath(pathname, INVENTORY_ITEM.href)}
                 collapsed={collapsed}
               />
               {role === "owner" && (

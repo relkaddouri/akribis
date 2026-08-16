@@ -20,6 +20,19 @@ import type { ProductFormInput } from "@/lib/validations/products";
  * Every expectation here records OBSERVED behaviour, including the broken
  * ones. Do not "fix" a failing expectation by changing the number — the
  * numbers are the report.
+ *
+ * All four bugs it originally recorded — ① deliveries duplicated on
+ * replay, ② Safari network errors misclassified and writes silently
+ * dropped, ③ sales repriced from the catalogue at sync time, ④ the badge
+ * claiming "En ligne" over an unreachable database — have since been
+ * fixed, and these scenarios now record the corrected behaviour. Their
+ * regression coverage lives in tests/orders/receive-order.test.ts,
+ * tests/offline/sync-engine.test.ts and tests/pos/create-sale.test.ts.
+ *
+ * What this file still documents, and what remains true, is which actions
+ * have an offline layer at all: products, sales and delivery receipts do;
+ * clients, returns, purchase orders, supplier credits and the news feed
+ * do not, and throw with no network.
  */
 
 /** Mirrors a Server Action's failure mode when the browser has no network. */
@@ -33,7 +46,11 @@ const server = vi.hoisted(() => ({
   /** Rows the stand-in Postgres holds, so duplication is observable. */
   products: new Map<string, { id: string; name: string; quantityInStock: number; updatedAt: Date }>(),
   sales: [] as Array<{ id: string; clientId?: string; paymentMethod: string }>,
-  deliveries: [] as Array<{ orderId: string; lines: Array<{ orderItemId: string; qty: number }> }>,
+  deliveries: [] as Array<{
+    id?: string;
+    orderId: string;
+    lines: Array<{ orderItemId: string; qty: number }>;
+  }>,
   /** Server-side received totals per order line, as receiveOrder maintains them. */
   receivedByLine: new Map<string, number>(),
   orderedByLine: new Map<string, number>(),
@@ -89,15 +106,24 @@ vi.mock("@/lib/server/sales", () => ({
       throw new Error("Unique constraint failed on the fields: (`id`)");
     }
     server.sales.push({ id, clientId: input.clientId, paymentMethod: input.paymentMethod });
-    return { id };
+    return { id, priceDrifts: [] };
   }),
 }));
 
 vi.mock("@/lib/server/orders", () => ({
-  receiveOrder: vi.fn(async (orderId: string, input: { lines: Array<{ orderItemId: string; receivedQuantity: number }> }) => {
+  receiveOrder: vi.fn(async (
+    orderId: string,
+    input: { lines: Array<{ orderItemId: string; receivedQuantity: number }> },
+    options?: { id?: string },
+  ) => {
     guard();
-    // Reproduces lib/server/orders.ts: a delivery row is created up front,
-    // then each line is clamped to what is still outstanding.
+    // Reproduces lib/server/orders.ts, idempotency check included: a
+    // delivery whose id is already on file has been applied, so a replay
+    // changes nothing.
+    if (options?.id && server.deliveries.some((d) => d.id === options.id)) {
+      return { id: orderId };
+    }
+    // Each line is clamped to what is still outstanding.
     const lines: Array<{ orderItemId: string; qty: number }> = [];
     for (const line of input.lines) {
       const ordered = server.orderedByLine.get(line.orderItemId) ?? 0;
@@ -108,7 +134,7 @@ vi.mock("@/lib/server/orders", () => ({
         lines.push({ orderItemId: line.orderItemId, qty: toReceive });
       }
     }
-    server.deliveries.push({ orderId, lines });
+    server.deliveries.push({ id: options?.id, orderId, lines });
     return { id: orderId };
   }),
   createOrder: vi.fn(async () => {
@@ -396,7 +422,7 @@ describe("8. receiving a delivery", () => {
     expect(server.receivedByLine.get("item-1")).toBe(10);
   });
 
-  it("DOUBLE-RECEIVES a partial delivery when the reply is lost and the queue retries", async () => {
+  it("receives a partial delivery ONCE when the reply is lost and the queue retries", async () => {
     server.orderedByLine.set("item-1", 10);
     await getDb().products.put(seedProduct({ quantityInStock: 0 }));
     setOnline(false);
@@ -414,18 +440,23 @@ describe("8. receiving a delivery", () => {
     const orders = await import("@/lib/server/orders");
     const mocked = vi.mocked(orders.receiveOrder);
     const commit = mocked.getMockImplementation()!;
-    mocked.mockImplementationOnce(async (orderId, input) => {
-      await commit(orderId, input);
+    mocked.mockImplementationOnce(async (orderId, input, options) => {
+      // Commits, then loses the reply — the classic at-least-once window.
+      // Every argument is forwarded, the delivery id included: dropping it
+      // here would fake the very bug this scenario is meant to measure.
+      await commit(orderId, input, options);
       throw new OfflineFetchError();
     });
 
     await processQueue();
     await processQueue();
 
-    // There is no idempotency key on receiveOrder: the retry is a second,
-    // independent reception of the same 5 units.
-    expect(server.receivedByLine.get("item-1")).toBe(10);
-    expect(server.deliveries).toHaveLength(2);
+    // Was the diagnostic's bug ①: with no idempotency key the retry was a
+    // second, independent reception, turning 5 units into 10 and letting
+    // the order close on goods that never arrived. The client-generated
+    // delivery id now makes the replay a no-op.
+    expect(server.receivedByLine.get("item-1")).toBe(5);
+    expect(server.deliveries).toHaveLength(1);
   });
 });
 
@@ -436,7 +467,7 @@ describe("12. the online / offline badge", () => {
     expect(getSnapshot().status).not.toBe("syncing");
   });
 
-  it("WRONGLY reports online when the queue is empty and the database is unreachable", async () => {
+  it("reports offline when the queue is empty and the database is unreachable", async () => {
     setOnline(true);
     // Device has a network interface, but nothing answers — the case the
     // badge is supposed to catch.
@@ -444,9 +475,10 @@ describe("12. the online / offline badge", () => {
 
     await processQueue();
 
-    // The only server call in an empty-queue pass is the product refresh,
-    // whose failure is swallowed, so the badge never learns about it.
-    expect(getSnapshot().status).toBe("online");
+    // Was the diagnostic's bug ④: the only server call in an empty-queue
+    // pass is the product refresh, and its failure was swallowed whole, so
+    // the badge announced "En ligne" over an unreachable database.
+    expect(getSnapshot().status).toBe("offline");
   });
 });
 
@@ -463,19 +495,20 @@ describe("error classification — which failures are retried", () => {
     expect(await countPendingSyncItems()).toBe(1);
   });
 
-  it("ABANDONS the same write after 5 passes when Safari phrases it \"Load failed\"", async () => {
+  it("keeps the write pending when Safari phrases it \"Load failed\"", async () => {
     await getDb().products.put(seedProduct());
     setOnline(false);
     await createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] });
 
     setOnline(true);
-    // Safari's fetch rejection message. It matches none of the patterns in
-    // isConnectivityError, so it is treated as an unknown error and the
-    // attempt counter advances until the write drops out of the queue.
+    // Was the diagnostic's bug ②: Safari's wording matched none of the
+    // connectivity patterns, so the failure was filed as unknown, the
+    // attempt counter advanced, and after five passes the sale left the
+    // queue and the pending badge — gone, with nothing to say so.
     server.failWith = "Load failed";
     for (let pass = 0; pass < 8; pass += 1) await processQueue();
 
-    expect(await countPendingSyncItems()).toBe(0);
+    expect(await countPendingSyncItems()).toBe(1);
     expect(server.sales).toHaveLength(0);
   });
 });
