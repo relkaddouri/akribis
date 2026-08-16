@@ -8,7 +8,13 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { prisma } from "@/lib/db/client";
 import { requireOwner } from "@/lib/auth/session";
-import { DEFAULT_AUTHENTICATED_PATH, LOGIN_PATH, RESET_PASSWORD_PATH } from "@/lib/auth/access-control";
+import {
+  DEFAULT_AUTHENTICATED_PATH,
+  LOGIN_PATH,
+  RESET_PASSWORD_PATH,
+  defaultPathForRole,
+} from "@/lib/auth/access-control";
+import { getSessionRoleFromUser } from "@/lib/auth/roles";
 import { isRateLimited } from "@/lib/auth/rate-limit";
 import {
   forgotPasswordSchema,
@@ -40,7 +46,7 @@ export async function signInAction(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword(parsed.data);
+  const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
   if (error) {
     // Signing in always needs a live round trip to Supabase — it can't
     // be served from the offline cache. Without this check, a dropped
@@ -52,7 +58,10 @@ export async function signInAction(
     return { error: "Identifiants incorrects" };
   }
 
-  redirect(DEFAULT_AUTHENTICATED_PATH);
+  // Akribis staff have no pharmacy dashboard. The middleware would bounce
+  // them anyway, but sending them straight to the back-office spares a
+  // visible redirect through a page they can never see.
+  redirect(defaultPathForRole(getSessionRoleFromUser(data.user)));
 }
 
 /**

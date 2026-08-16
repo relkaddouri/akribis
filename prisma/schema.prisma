@@ -849,7 +849,6 @@ model CatalogueProduit {
   /// fournit séparément (DOSAGE1/UNITE_DOSAGE1) — le fusionner dans le nom
   /// perdrait de l'information à la migration.
   dosage                String?
-  photoUrl              String?           @map("photo_url")
   /// Nul pour les produits migrés depuis `products`, où l'information
   /// n'existait pas : « à classer » plutôt qu'une valeur inventée dont
   /// dépendrait le taux de TVA.
@@ -902,11 +901,34 @@ model CatalogueProduit {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   stocks PharmacyStock[]
+  photos CatalogueProduitPhoto[]
 
   @@index([nom])
   @@index([dci])
   @@index([laboratoire])
   @@map("catalogue_produits")
+}
+
+/// Photos d'une fiche catalogue, ordonnées. Une table plutôt qu'un tableau
+/// de textes : `ordre` porte la notion de photo principale (la plus basse),
+/// et une ligne par photo permet d'en supprimer une sans réécrire les
+/// autres — un tableau se remplace en entier à chaque modification.
+model CatalogueProduitPhoto {
+  id                 String   @id @default(uuid())
+  catalogueProduitId String   @map("catalogue_produit_id")
+  url                String
+  /// 0 = photo principale, celle qu'affichent les listes et le POS.
+  /// Volontairement sans contrainte d'unicité : réordonner par échange
+  /// passerait par un état transitoire à deux photos de même rang, qu'un
+  /// index unique non différé refuserait.
+  ordre              Int      @default(0)
+  dateAjout          DateTime @default(now()) @map("date_ajout")
+
+  catalogueProduit CatalogueProduit @relation(fields: [catalogueProduitId], references: [id], onDelete: Cascade)
+
+  /// Sert la requête « photo principale de ce produit ».
+  @@index([catalogueProduitId, ordre])
+  @@map("catalogue_produit_photos")
 }
 
 /// Section 5.2 — ce qu'une officine ajoute par-dessus une fiche catalogue.

@@ -67,6 +67,7 @@ Les deux sont documentés dans le schéma, à l'endroit du champ.
 | `pph`, `tvaVente`, `tvaAchat`, `remboursable` | `catalogue_produits` | tel quel |
 | `baseRemboursement` | `prix_base_remboursement` | c'est un **montant**, pas le taux ; `taux_remboursement` reste nul |
 | `posologie*`, `monographie` | `catalogue_produits` | tel quel |
+| `photoUrl` | `catalogue_produit_photos` (ordre 0) | devient la photo principale — voir ci-dessous |
 | `purchasePrice` | `pharmacy_stock.prix_achat` | propre à l'officine |
 | `lowStockThreshold` | `pharmacy_stock.stock_minimum` | propre à l'officine |
 | `quantityInStock` | `product_lots.quantite` | un seul lot, portant toute la quantité |
@@ -79,6 +80,34 @@ contrôle la signale comme « à compléter ».
 
 L'id du produit devient l'id de sa fiche catalogue quand celle-ci est créée :
 le lien reste traçable, et rejouer le script retombe sur la même ligne.
+
+## Photos : une table, plus une colonne
+
+`catalogue_produits.photo_url` a été remplacée par **`catalogue_produit_photos`**
+(`id`, `catalogue_produit_id`, `url`, `ordre`, `date_ajout`), migration
+`20260816191750_catalogue_photos`. Les trois étapes y sont dans cet ordre :
+créer la table, **reprendre l'existant**, puis seulement retirer la colonne —
+Prisma avait généré le `DROP COLUMN` en premier, ce qui aurait effacé les
+photos avant d'avoir de quoi les recevoir.
+
+- `ordre` porte la notion de **photo principale** : la plus basse. Pas de
+  contrainte d'unicité dessus, sinon réordonner par échange serait bloqué par
+  l'état transitoire à deux photos de même rang.
+- La position dans la liste du formulaire *est* l'ordre. `renumber()` recalcule
+  `ordre` à chaque enregistrement, donc « première de la liste » et « photo
+  principale » ne peuvent pas diverger.
+- Suppression en cascade depuis la fiche.
+- Stockage : bucket `catalogue-photos`, **lecture publique, écriture refusée à
+  la clé anon** (aucune policy RLS d'insertion) ; seule la clé service-role
+  écrit, et uniquement derrière `requireAdmin()`. Le bucket refuse lui-même
+  tout MIME hors jpg/png/webp et tout fichier au-delà de 5 Mo.
+- Limites : **6 photos par fiche, 5 Mo par fichier** — justifiées dans
+  `lib/catalogue/photo-rules.ts`.
+
+À reprendre en phase suivante : une photo retirée du formulaire n'est pas
+supprimée du bucket (l'objet devient orphelin). C'est délibéré — la supprimer
+tout de suite casserait la fiche de qui abandonne ensuite le formulaire — mais
+un nettoyage périodique des objets non référencés reste à écrire.
 
 ## Idempotence
 

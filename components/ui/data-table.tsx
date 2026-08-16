@@ -14,6 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Table,
   TableBody,
   TableCell,
@@ -41,6 +47,80 @@ export type DataTableFilter<T> = {
 
 const DEFAULT_PAGE_SIZE = 10;
 const ALL_VALUE = "__all__";
+/**
+ * Past this many options a dropdown stops being something you can scan.
+ * The national catalogue has over a thousand distinct DCIs, so its filter
+ * switches to a searchable list while the stock table's dozen categories
+ * keep the plain select they already had.
+ */
+const SEARCHABLE_FILTER_THRESHOLD = 12;
+
+/** A filter with more options than anyone can scroll: type to narrow it down. */
+function SearchableFilter({
+  filter,
+  value,
+  onChange,
+}: {
+  filter: { id: string; label: string; options: { label: string; value: string }[] };
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const selected = filter.options.find((option) => option.value === value);
+
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const pool = needle
+      ? filter.options.filter((option) => option.label.toLowerCase().includes(needle))
+      : filter.options;
+    // Rendering 1 100 menu items would cost more than it shows; the search
+    // box is how you reach the rest.
+    return pool.slice(0, 100);
+  }, [filter.options, query]);
+
+  return (
+    <DropdownMenu onOpenChange={(open) => !open && setQuery("")}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-8 w-auto min-w-36 max-w-56 items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none transition-colors select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <span className={cn("truncate", !selected && "text-muted-foreground")}>
+            {selected ? selected.label : `${filter.label} : tous`}
+          </span>
+          <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64 p-0">
+        <div className="p-1.5">
+          <Input
+            autoFocus
+            placeholder={`Rechercher ${filter.label.toLowerCase()}...`}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            // Radix's typeahead would otherwise steal every keystroke and
+            // jump the highlight around instead of letting you type.
+            onKeyDown={(event) => event.stopPropagation()}
+            className="h-8"
+          />
+        </div>
+        <div className="max-h-64 overflow-y-auto p-1 pt-0">
+          <DropdownMenuItem onSelect={() => onChange(ALL_VALUE)}>
+            {filter.label} : tous
+          </DropdownMenuItem>
+          {matches.map((option) => (
+            <DropdownMenuItem key={option.value} onSelect={() => onChange(option.value)}>
+              <span className="truncate">{option.label}</span>
+            </DropdownMenuItem>
+          ))}
+          {matches.length === 0 && (
+            <p className="px-2 py-3 text-center text-sm text-muted-foreground">Aucun résultat</p>
+          )}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export function DataTable<T>({
   columns,
@@ -187,25 +267,34 @@ export function DataTable<T>({
               className="max-w-xs"
             />
           )}
-          {filters?.map((filter) => (
-            <Select
-              key={filter.id}
-              value={activeFilters[filter.id] ?? ALL_VALUE}
-              onValueChange={(value) => handleFilterChange(filter.id, value)}
-            >
-              <SelectTrigger className="w-auto min-w-36">
-                <SelectValue placeholder={filter.label} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_VALUE}>{filter.label} : tous</SelectItem>
-                {filter.options.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ))}
+          {filters?.map((filter) =>
+            filter.options.length > SEARCHABLE_FILTER_THRESHOLD ? (
+              <SearchableFilter
+                key={filter.id}
+                filter={filter}
+                value={activeFilters[filter.id] ?? ALL_VALUE}
+                onChange={(value) => handleFilterChange(filter.id, value)}
+              />
+            ) : (
+              <Select
+                key={filter.id}
+                value={activeFilters[filter.id] ?? ALL_VALUE}
+                onValueChange={(value) => handleFilterChange(filter.id, value)}
+              >
+                <SelectTrigger className="w-auto min-w-36">
+                  <SelectValue placeholder={filter.label} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_VALUE}>{filter.label} : tous</SelectItem>
+                  {filter.options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ),
+          )}
         </div>
       )}
 

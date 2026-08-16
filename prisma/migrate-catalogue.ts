@@ -66,6 +66,7 @@ export type MigrationReport = {
   stockExistants: number;
   lotsCrees: number;
   lotsExistants: number;
+  photosCreees: number;
   sansPeremption: number;
 };
 
@@ -78,6 +79,7 @@ function emptyReport(): MigrationReport {
     stockExistants: 0,
     lotsCrees: 0,
     lotsExistants: 0,
+    photosCreees: 0,
     sansPeremption: 0,
   };
 }
@@ -101,15 +103,29 @@ function emptyReport(): MigrationReport {
  */
 const INSERT_CATALOGUE = `
   INSERT INTO catalogue_produits (
-    id, nom, code_barres, dosage, photo_url, classe_therapeutique,
+    id, nom, code_barres, dosage, classe_therapeutique,
     forme_galenique, dci, laboratoire, ppv, pph, tva_vente, tva_achat,
     remboursable, prix_base_remboursement, posologie_adulte, posologie_enfant,
     monographie, created_at, updated_at
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-    $17, $18, $19, now()
+    $17, $18, now()
   )
   RETURNING id
+`;
+
+/**
+ * A fiche's photos live in their own table now, so `products.photo_url`
+ * becomes the photo principale (ordre 0) rather than a column. Guarded on
+ * the URL being present, and skipped when the fiche already carries it,
+ * so a replay adds nothing.
+ */
+const INSERT_CATALOGUE_PHOTO = `
+  INSERT INTO catalogue_produit_photos (id, catalogue_produit_id, url, ordre, date_ajout)
+  SELECT gen_random_uuid(), $1, $2, 0, $3
+  WHERE NOT EXISTS (
+    SELECT 1 FROM catalogue_produit_photos WHERE catalogue_produit_id = $1 AND url = $2
+  )
 `;
 
 const INSERT_STOCK = `
@@ -156,7 +172,6 @@ export async function migrateCatalogue(
         product.name,
         product.barcode,
         product.dosage,
-        product.photo_url,
         product.category,
         product.form,
         product.dci,
@@ -177,6 +192,20 @@ export async function migrateCatalogue(
     } else {
       catalogueId = product.id;
       report.catalogueCrees += 1;
+    }
+
+    // La photo du produit devient la photo principale de la fiche. Fait
+    // aussi pour une fiche réutilisée : deux officines peuvent avoir
+    // photographié le même produit, et la déduplication porte sur l'URL.
+    if (!options.dryRun && product.photo_url?.trim()) {
+      await client.query(INSERT_CATALOGUE_PHOTO, [
+        catalogueId,
+        product.photo_url.trim(),
+        product.created_at,
+      ]);
+      report.photosCreees += 1;
+    } else if (options.dryRun && product.photo_url?.trim()) {
+      report.photosCreees += 1;
     }
 
     if (options.dryRun) {
@@ -252,6 +281,7 @@ function printReport(report: MigrationReport, dryRun: boolean) {
   console.log(`  lignes de stock déjà là      ${report.stockExistants}`);
   console.log(`  lots créés                   ${report.lotsCrees}`);
   console.log(`  lots déjà là                 ${report.lotsExistants}`);
+  console.log(`  photos reprises              ${report.photosCreees}`);
   if (report.sansPeremption > 0) {
     console.log(
       `\n  ${report.sansPeremption} produit(s) sans date de péremption — lot créé sans date,`,
