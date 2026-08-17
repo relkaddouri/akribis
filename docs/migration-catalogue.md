@@ -154,6 +154,169 @@ le script tient à l'échelle de la production** : il boucle produit par produit
 avec 3 à 5 allers-retours SQL chacun. Au-delà de quelques milliers de produits,
 le regrouper en insertions par lot avant de le lancer sur la base réelle.
 
+## Phase 3 — l'ajout au stock part du catalogue
+
+`products.catalogue_produit_id` (migration `20260816235334_product_catalogue_link`,
+additive, avec rattachement des produits existants par id puis par code-barres).
+
+Le bouton « Ajouter un produit » ouvre désormais une recherche dans le
+catalogue, puis un formulaire réduit aux seuls champs de l'officine
+(fournisseur, quantité, seuil, prix d'achat, référence interne,
+emplacement). La validation crée **à la fois** la ligne `products` — qui
+reste la table opérationnelle — et la ligne `pharmacy_stock`, plus un
+mouvement de stock d'entrée.
+
+**Ce qui n'a délibérément pas changé** : le POS, la vente, le retour, la
+réception et l'inventaire lisent et écrivent toujours `products`. Deux
+raisons, décidées avec le titulaire :
+
+- `pharmacy_stock` n'a pas de quantité (elle dérive des lots), alors que la
+  vente décrémente `products.quantity_in_stock` ;
+- le POS cherche dans IndexedDB, ce qui permet de vendre hors ligne. Une
+  jointure serveur supprimerait cette propriété.
+
+La source des données produit est donc bien le catalogue — les fiches en
+sont désormais *issues* — sans toucher aux flux qui les consomment.
+
+Les prix réglementés sont **copiés** dans `products` à la création, pas
+référencés : c'est un instantané, pour qu'un changement national ne
+réécrive pas en silence le prix de vente d'une officine avant que cette
+décision ait un propriétaire.
+
+Le formulaire manuel complet reste à `/dashboard/stock/produits/nouveau/manuel`,
+atteignable quand le catalogue ne trouve rien ou que le réseau est coupé.
+« Suggérer ce produit » n'est qu'un point d'entrée : le flux de suggestion
+est une phase à part.
+
+## Correctif de conception — `pharmacy_stock` devient une copie complète
+
+**Ce qui change par rapport à la phase 1 telle qu'écrite plus haut.** La
+phase 1 avait donné à `pharmacy_stock` uniquement les champs de l'officine,
+et faisait lire identification, prix et descriptif à travers
+`catalogue_produit_id`. Ce n'est plus la conception retenue.
+
+`pharmacy_stock` porte désormais **une copie complète et modifiable** de la
+fiche catalogue — les 34 colonnes de la section 5.1 — en plus de ses propres
+champs. Migration `20260817012434_pharmacy_stock_full_copy` : purement
+additive, un seul `ALTER TABLE`, 34 `ADD COLUMN`, aucun `DROP`, aucun
+`NOT NULL`, aucun défaut posé.
+
+Toutes les nouvelles colonnes sont **nullable**, y compris les booléens et
+les enums. Ce n'est pas de la paresse : un `NULL` s'y lit « pas encore
+recopié depuis le catalogue », et c'est précisément ce qui rend le backfill
+rejouable sans risque.
+
+`code_barres` est **non unique** ici, contrairement au catalogue : deux
+officines stockent le même produit.
+
+### Le backfill
+
+```bash
+npm run backfill:pharmacy-stock -- --dry-run
+npm run backfill:pharmacy-stock
+```
+
+`prisma/backfill-pharmacy-stock.ts`. Le `SET` est engendré depuis une seule
+liste de noms de colonnes, identiques des deux côtés — impossible d'apparier
+PPH avec PPV, l'erreur classique d'un backfill écrit à la main.
+
+**Rejouable, et non destructif.** Il ne cible que les lignes jamais recopiées
+(`nom IS NULL`). Une officine qui a depuis corrigé sa copie ne la verra pas
+écrasée par un second passage. C'est aussi la limite du script, par
+construction : il ne resynchronise pas.
+
+### Vérifié sur staging
+
+| | |
+|---|---|
+| Lignes `pharmacy_stock` | 2 → 2 (inchangé) |
+| Colonnes | 14 → 48 |
+| Lignes recopiées | 2 |
+| Écarts avec le catalogue après recopie | 0 sur 34 colonnes × 2 lignes |
+| Rejeu | 0 ligne touchée |
+
+**Indépendance prouvée** (transaction annulée) : modifier `pharmacy_stock`
+laisse le catalogue intact ; modifier le catalogue laisse la copie de
+l'officine intacte. Les champs propres à la pharmacie (`stock_minimum`,
+`localisation`, `prix_achat`…) ne sont jamais touchés par le backfill.
+
+### La règle pour la suite
+
+`catalogue_produit_id` **reste**, mais uniquement comme lien de traçabilité :
+savoir de quelle fiche nationale cette ligne est issue.
+
+> Plus aucun code ne doit lire l'identification, les prix ou le descriptif à
+> travers ce lien. Ces valeurs se lisent directement sur `pharmacy_stock`.
+
+C'est écrit à l'endroit du champ dans `prisma/schema.prisma`, pour que la
+règle se trouve là où on l'oublierait.
+
+### Raccordement de l'action — fait
+
+`addCatalogueProduitToStock` (`lib/server/stock-entry.ts`) remplit désormais
+les 34 colonnes à la création de la ligne `pharmacy_stock`, et crée le lot
+d'ouverture.
+
+- **Les 34 colonnes.** `catalogueSnapshot(fiche)` les pose à la création. Sur
+  une ligne préexistante (migration de phase 2), elles ne sont (re)copiées que
+  si `nom` est nul — même marqueur que le backfill. Écraser ici annulerait en
+  silence une correction faite par l'officine, ce que toute cette séparation
+  existe précisément pour empêcher.
+- **Le lot d'ouverture.** Numéro sentinelle `STOCK-INITIAL`, sur le modèle de
+  `MIGRATION-INITIALE` : ces unités n'ont pas de numéro réel, il vient du
+  Datamatrix à la première vraie réception. Créé seulement si la quantité
+  initiale est > 0 — un lot de zéro unité ne décrit rien, et la somme vaut
+  correctement zéro sans lui.
+
+Vérifié en transaction annulée : **0 écart sur les 34 colonnes**, lot
+`STOCK-INITIAL` créé, champs propres à l'officine (`stock_minimum`,
+`localisation`) intacts.
+
+La ligne SMECTA créée sur staging par la version défectueuse a été réparée
+(son lot manquant ajouté). `npm run verify:catalogue` est de nouveau vert :
+
+```
+products 2 · pharmacy_stock 2 · product_lots 2
+quantité totale 394 → 394
+✓ Aucune incohérence.
+```
+
+### La copie appartient à la pharmacie
+
+Décision actée, et elle change le sens de tout ce qui précède : le catalogue
+est **un point de départ pratique, pas une source figée**. Une fois copiée,
+chaque champ appartient à l'officine — prix, TVA et taux de remboursement
+compris — et se modifie sans aucune validation Admin.
+
+Conséquences dans l'interface :
+
+- La fiche produit **ne sépare plus** « verrouillé » et « modifiable ». Le
+  cadenas et la mention « lecture seule » ont été retirés : tout passe par le
+  même bouton « Modifier ».
+- Avant validation, le flux d'ajout affiche exactement ceci, sans autre
+  promesse : *« Vérifiez ces informations avant de les ajouter à votre
+  stock. »*
+- Un bouton **« Mettre à jour depuis le catalogue »** est disponible à tout
+  moment sur la fiche. `refreshFromCatalogue()` réimporte les valeurs
+  actuelles — **uniquement sur clic explicite, jamais automatiquement**. Une
+  resynchronisation silencieuse écraserait les corrections de la pharmacie
+  sans que personne le remarque.
+
+Le réimport écrase les champs produit et **rien d'autre**. Vérifié en
+transaction annulée : après réimport, nom/prix/TVA reviennent aux valeurs du
+catalogue, tandis que quantité (77), seuil (9), prix d'achat (55) et
+emplacement (« MON RAYON ») restent ceux de l'officine.
+
+### Le doublon qui reste à trancher
+
+La même fiche existe en **trois exemplaires** — `catalogue_produits`,
+`pharmacy_stock`, et `products` (que le flux d'ajout remplit aussi depuis le
+catalogue). Deux copies opérationnelles pour une seule officine : soit
+`products` disparaît au profit de `pharmacy_stock`, soit l'inverse. Le choix
+n'a pas encore été fait, et tant qu'il ne l'est pas, **le flux d'ajout écrit
+les deux** — c'est délibéré, mais ce n'est pas tenable durablement.
+
+
 ## Ce qui reste à faire — phase suivante
 
 Par ordre de dépendance :

@@ -23,14 +23,22 @@ function optionalTrimmed() {
 function optionalPositive(message = "Doit être ≥ 0") {
   return z.preprocess(
     (value) => (value === "" || value === null || value === undefined ? null : value),
-    z.union([z.coerce.number().min(0, message), z.null()]),
+    // `z.null()` en premier : une union est essayée de gauche à droite, et
+    // `z.coerce.number()` accepte `null` en le convertissant en 0. Placé après,
+    // il transformait tout champ vide en 0 — un PPV inconnu devenait un prix
+    // réglementé de 0,00 DH, et un prix d'achat vide donnait 100 % de marge.
+    z.union([z.null(), z.coerce.number().min(0, message)]),
   );
 }
 
 function optionalPercent() {
   return z.preprocess(
     (value) => (value === "" || value === null || value === undefined ? null : value),
-    z.union([z.coerce.number().min(0, "Entre 0 et 100").max(100, "Entre 0 et 100"), z.null()]),
+    // `z.null()` en premier : une union est essayée de gauche à droite, et
+    // `z.coerce.number()` accepte `null` en le convertissant en 0. Placé après,
+    // il transformait tout champ vide en 0 — un PPV inconnu devenait un prix
+    // réglementé de 0,00 DH, et un prix d'achat vide donnait 100 % de marge.
+    z.union([z.null(), z.coerce.number().min(0, "Entre 0 et 100").max(100, "Entre 0 et 100")]),
   );
 }
 
