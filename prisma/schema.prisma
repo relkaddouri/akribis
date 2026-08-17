@@ -108,10 +108,22 @@ model Product {
   posologieEnfant   String?   @map("posologie_enfant")
   posologieAdulte   String?   @map("posologie_adulte")
   monographie       String?
+  /// La fiche catalogue nationale dont ce produit est issu, quand il a été
+  /// ajouté depuis le catalogue. Nul pour les produits saisis à la main
+  /// avant — ou après — cette bascule : le champ relie, il n'impose pas.
+  ///
+  /// `products` reste la table opérationnelle (quantité, prix pratiqué,
+  /// ventes, réceptions, inventaire). Ce lien est ce qui permet à la fiche
+  /// produit d'afficher les informations catalogue en lecture seule, et il
+  /// prépare la bascule complète des lectures — voir docs/migration-catalogue.md.
+  catalogueProduitId String?  @map("catalogue_produit_id")
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
   pharmacy        Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  /// `SetNull` plutôt que `Cascade` : retirer une fiche du catalogue ne doit
+  /// jamais faire disparaître le stock d'une officine ni ses ventes passées.
+  catalogue       CatalogueProduit?    @relation(fields: [catalogueProduitId], references: [id], onDelete: SetNull)
   stockMovements  StockMovement[]
   saleItems       SaleItem[]
   orderItems      OrderItem[]
@@ -123,6 +135,7 @@ model Product {
 
   @@unique([pharmacyId, barcode])
   @@index([pharmacyId])
+  @@index([catalogueProduitId])
   @@map("products")
 }
 
@@ -900,8 +913,9 @@ model CatalogueProduit {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  stocks PharmacyStock[]
-  photos CatalogueProduitPhoto[]
+  stocks   PharmacyStock[]
+  photos   CatalogueProduitPhoto[]
+  produits Product[]
 
   @@index([nom])
   @@index([dci])
@@ -955,10 +969,71 @@ model PharmacyStock {
   /// fonctionner.
   prixAchat        Decimal? @map("prix_achat") @db.Decimal(10, 2)
 
+  // ------------------------------------------------------------------
+  // Copie complète et modifiable de la fiche catalogue (PRD 5.1).
+  //
+  // Correctif de conception : la phase 1 lisait ces champs à travers
+  // `catalogueProduitId`. Ils sont désormais DUPLIQUÉS ici, et l'officine
+  // les modifie sans jamais toucher au catalogue national — ni l'inverse.
+  // Les deux lignes partent identiques après le backfill puis divergent
+  // librement.
+  //
+  // Tout est nullable : la migration est additive sur une table déjà en
+  // service, et un NULL se lit « pas encore recopié depuis le catalogue »,
+  // ce qui rend le backfill rejouable sans écraser une saisie de la
+  // pharmacie. `codeBarres` n'est surtout PAS unique ici, contrairement au
+  // catalogue : deux officines stockent le même produit.
+  // ------------------------------------------------------------------
+
+  // --- Identification ---
+  nom                   String?
+  codeBarres            String?           @map("code_barres")
+  dosage                String?
+  categorie             ProduitCategorie?
+  classeTherapeutique   String?           @map("classe_therapeutique")
+  formeGalenique        String?           @map("forme_galenique")
+  dci                   String?
+  laboratoire           String?
+  produitTableau        TableauSubstance? @map("produit_tableau")
+  gamme                 String?
+  sousGamme             String?           @map("sous_gamme")
+  necessitePrescription Boolean?          @map("necessite_prescription")
+  produitCommercialise  Boolean?          @map("produit_commercialise")
+  groupeProduits        String?           @map("groupe_produits")
+  /// Statut de la fiche telle que recopiée. Distinct de `actifLocalement`,
+  /// qui dit si CETTE officine référence encore le produit.
+  actifCatalogue        Boolean?          @map("actif_catalogue")
+  refrigerationRequise  Boolean?          @map("refrigeration_requise")
+  conditionnement       String?
+  referenceLabo         String?           @map("reference_labo")
+
+  // --- Prix et fiscalité ---
+  pph                   Decimal? @db.Decimal(10, 2)
+  ppv                   Decimal? @db.Decimal(10, 2)
+  prixBaseRemboursement Decimal? @map("prix_base_remboursement") @db.Decimal(10, 2)
+  tvaAchat              Decimal? @map("tva_achat") @db.Decimal(5, 2)
+  tvaVente              Decimal? @map("tva_vente") @db.Decimal(5, 2)
+  remboursable          Boolean?
+  tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+
+  // --- Descriptif ---
+  description                 String?
+  excipients                  String?
+  posologieAdulte             String? @map("posologie_adulte")
+  posologieEnfant             String? @map("posologie_enfant")
+  indications                 String?
+  contreIndicationConduite    String? @map("contre_indication_conduite")
+  contreIndicationAllaitement String? @map("contre_indication_allaitement")
+  contreIndicationGrossesse   String? @map("contre_indication_grossesse")
+  monographie                 String?
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   pharmacy  Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  /// Lien de traçabilité UNIQUEMENT : d'où vient cette fiche. Aucun code ne
+  /// doit lire identification, prix ou descriptif à travers lui — ces
+  /// valeurs vivent maintenant dans les colonnes ci-dessus.
   catalogue CatalogueProduit @relation(fields: [catalogueProduitId], references: [id])
   supplier  Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   lots      ProductLot[]

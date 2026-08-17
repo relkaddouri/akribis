@@ -20,7 +20,13 @@ export type ListProductsParams = {
   search?: string;
 };
 
-type DecimalField = "price" | "pph" | "tvaVente" | "tvaAchat" | "baseRemboursement";
+type DecimalField =
+  | "price"
+  | "purchasePrice"
+  | "pph"
+  | "tvaVente"
+  | "tvaAchat"
+  | "baseRemboursement";
 
 /**
  * Prisma's `Decimal` isn't a plain JSON value, so every Decimal column
@@ -30,6 +36,7 @@ type DecimalField = "price" | "pph" | "tvaVente" | "tvaAchat" | "baseRembourseme
  */
 export type ProductRecord = Omit<ProductModel, DecimalField> & {
   price: number;
+  purchasePrice: number | null;
   pph: number | null;
   tvaVente: number | null;
   tvaAchat: number | null;
@@ -40,6 +47,9 @@ function toProductRecord(product: ProductModel): ProductRecord {
   return {
     ...product,
     price: Number(product.price),
+    // Was missing from the conversion while nothing read it; a Decimal
+    // reaching a client component throws at the RSC boundary.
+    purchasePrice: product.purchasePrice !== null ? Number(product.purchasePrice) : null,
     pph: product.pph !== null ? Number(product.pph) : null,
     tvaVente: product.tvaVente !== null ? Number(product.tvaVente) : null,
     tvaAchat: product.tvaAchat !== null ? Number(product.tvaAchat) : null,
