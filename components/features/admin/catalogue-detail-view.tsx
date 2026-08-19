@@ -6,12 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailBlock, DetailGroup, DetailRow, YesNo } from "@/components/ui/detail-list";
+import { CategorieBadge } from "@/components/features/catalogue/categorie-badge";
 import { CatalogueFlagSwitch } from "@/components/features/admin/catalogue-flag-switch";
 import { CataloguePhotoCarousel } from "@/components/features/admin/catalogue-photo-carousel";
-import { PRODUIT_CATEGORIES, TABLEAUX_SUBSTANCE } from "@/lib/validations/catalogue";
+import { TABLEAUX_SUBSTANCE } from "@/lib/validations/catalogue";
 import type { CatalogueProduitRecord } from "@/lib/server/catalogue";
 
-const CATEGORIE_LABELS = new Map(PRODUIT_CATEGORIES.map((c) => [c.value, c.label]));
 const TABLEAU_LABELS = new Map(TABLEAUX_SUBSTANCE.map((t) => [t.value, t.label]));
 
 function dirham(value: number | null): string {
@@ -103,13 +103,7 @@ export function CatalogueDetailView({ produit }: { produit: CatalogueProduitReco
             </div>
 
             <div className="flex flex-wrap gap-sp-sm">
-              {produit.categorie ? (
-                <Badge>{CATEGORIE_LABELS.get(produit.categorie) ?? produit.categorie}</Badge>
-              ) : (
-                <Badge variant="outline" className="text-amber-600">
-                  À classer
-                </Badge>
-              )}
+              <CategorieBadge categorie={produit.categorie} />
 
               {produit.remboursable && <Badge variant="secondary">Remboursable</Badge>}
 

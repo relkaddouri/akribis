@@ -13,8 +13,8 @@ import { ADMIN_CATALOGUE_PATH } from "@/lib/auth/access-control";
 import { CatalogueFlagSwitch } from "@/components/features/admin/catalogue-flag-switch";
 import { PRODUIT_CATEGORIES } from "@/lib/validations/catalogue";
 import { principalPhoto } from "@/lib/catalogue/photo-rules";
+import { CategorieBadge } from "@/components/features/catalogue/categorie-badge";
 
-const CATEGORIE_LABELS = new Map(PRODUIT_CATEGORIES.map((c) => [c.value, c.label]));
 
 function formatDirham(value: number | null): string {
   if (value === null) return "—";
@@ -119,13 +119,17 @@ export function CatalogueTable({ produits }: { produits: CatalogueProduitRecord[
       {
         id: "categorie",
         header: "Catégorie",
+        // Une pastille plutôt qu'un mot : dans une liste de 5 918 lignes,
+        // la teinte se reconnaît sans être lue.
         cell: (row) =>
           row.categorie ? (
-            <span className="text-sm">{CATEGORIE_LABELS.get(row.categorie) ?? row.categorie}</span>
+            <CategorieBadge categorie={row.categorie} />
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="text-xs text-amber-600">À classer</span>
+                <span>
+                  <CategorieBadge categorie={null} />
+                </span>
               </TooltipTrigger>
               <TooltipContent>La catégorie détermine le taux de TVA applicable.</TooltipContent>
             </Tooltip>
