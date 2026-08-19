@@ -87,6 +87,18 @@ vi.mock("@/lib/server/inventory", () => ({
       session.statut = "termine";
     },
   ),
+  // Hydration reads these two. Empty here on purpose: these tests are
+  // about pushing writes up, and a server with nothing to send back keeps
+  // them focused. Pulling sessions down is covered by
+  // tests/inventory/hydrate-from-server.test.ts.
+  listInventorySessions: vi.fn(async () => {
+    guard();
+    return [];
+  }),
+  listInventorySessionCounts: vi.fn(async () => {
+    guard();
+    return [];
+  }),
 }));
 
 vi.mock("@/lib/server/products", () => ({

@@ -6,7 +6,13 @@
  * indicator (via useSyncExternalStore in use-sync-status.ts).
  */
 
-import { getDb, type ConflictLogItem, type ProductRecord, type SyncQueueItem } from "@/lib/offline/db";
+import {
+  getDb,
+  type ConflictLogItem,
+  type LocalInventorySession,
+  type ProductRecord,
+  type SyncQueueItem,
+} from "@/lib/offline/db";
 import {
   backoffDelayMs,
   countPendingSyncItems,
@@ -340,6 +346,99 @@ export async function hydrateProductsFromServer(): Promise<void> {
   }
 }
 
+/**
+ * Sessions a queued write still speaks for. The server's copy of those is
+ * behind this device — the counts typed into them have not landed yet —
+ * so hydration must leave them alone rather than overwrite the shelf work
+ * of the last hour.
+ */
+function inventorySessionIdsInQueue(items: SyncQueueItem[]): Set<string> {
+  const ids = new Set<string>();
+  for (const item of items) {
+    if (item.type === "startInventory" || item.type === "applyInventory") {
+      ids.add(item.entityId);
+      continue;
+    }
+    if (item.type === "recordInventoryCount") {
+      // Here `entityId` is the count line, not the session it belongs to —
+      // the session id only exists inside the payload.
+      const payload = item.payload as { input?: { sessionId?: string } };
+      if (payload?.input?.sessionId) ids.add(payload.input.sessionId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Pulls the pharmacy's inventory history down into Dexie.
+ *
+ * The module used to push only: a session lived in the browser that
+ * created it and nowhere else. Anything that emptied IndexedDB — new
+ * device, other profile, site data cleared — left "Aucun inventaire" on
+ * screen while the sessions sat untouched in Postgres, with no way back.
+ * `listInventorySessions` had been written for exactly this and was never
+ * wired to anything.
+ */
+export async function hydrateInventoryFromServer(): Promise<void> {
+  if (!isOnline()) return;
+  try {
+    const sessions = await remoteInventory.listInventorySessions();
+    const db = getDb();
+    const unsettled = await db.syncQueue
+      .where("status")
+      .anyOf(["pending", "syncing", "failed"])
+      .toArray();
+    const queued = inventorySessionIdsInQueue(unsettled);
+
+    for (const session of sessions) {
+      if (queued.has(session.id)) continue;
+
+      const record: LocalInventorySession = {
+        id: session.id,
+        pharmacyId: session.pharmacyId,
+        statut: session.statut,
+        dateDebut: session.dateDebut,
+        dateFin: session.dateFin,
+        syncStatus: "synced",
+      };
+
+      const local = await db.inventorySessions.get(session.id);
+      if (local) {
+        // Already here: refresh the header only. Another device may have
+        // closed the session since, but its lines are the same rows, and
+        // re-reading them every fifteen seconds would drag the whole shelf
+        // list down the wire for nothing.
+        await db.inventorySessions.put(record);
+        continue;
+      }
+
+      const counts = await remoteInventory.listInventorySessionCounts(session.id);
+      await db.transaction("rw", db.inventorySessions, db.inventoryCounts, async () => {
+        await db.inventorySessions.put(record);
+        await db.inventoryCounts.bulkPut(
+          counts.map((count) => ({
+            id: count.id,
+            sessionId: session.id,
+            productId: count.productId,
+            productName: count.productName,
+            quantiteTheorique: count.quantiteTheorique,
+            unitPrice: count.unitPrice,
+            quantiteComptee: count.quantiteComptee,
+            dateComptage: count.dateComptage,
+          })),
+        );
+      });
+    }
+  } catch (err) {
+    // Same rule as the product cache: a failed refresh must not stop the
+    // queue from draining, but a lost connection still has to reach the
+    // badge rather than being swallowed here.
+    if (isConnectivityError(err)) {
+      connectivityFailureThisPass = true;
+    }
+  }
+}
+
 let processing = false;
 
 export async function processQueue(): Promise<void> {
@@ -359,6 +458,9 @@ export async function processQueue(): Promise<void> {
       await syncItem(item);
     }
     await hydrateProductsFromServer();
+    // After the queue, never before: a session that has just synced must
+    // not still look "queued" and be skipped by the hydration.
+    await hydrateInventoryFromServer();
   } finally {
     processing = false;
     await refreshPendingCount();

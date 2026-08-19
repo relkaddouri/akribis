@@ -27,6 +27,8 @@ const remote = vi.hoisted(() => ({
   updateProduct: vi.fn(),
   createSale: vi.fn(),
   receiveOrder: vi.fn(),
+  listInventorySessions: vi.fn(),
+  listInventorySessionCounts: vi.fn(),
 }));
 
 vi.mock("@/lib/server/products", () => ({
@@ -42,6 +44,17 @@ vi.mock("@/lib/server/sales", () => ({
 
 vi.mock("@/lib/server/orders", () => ({
   receiveOrder: remote.receiveOrder,
+}));
+
+// Imported by the sync engine for the inventory hydration pass. Left
+// empty: nothing here exercises inventory, and an unmocked module would
+// reach the real Prisma-backed action.
+vi.mock("@/lib/server/inventory", () => ({
+  startInventorySession: vi.fn(),
+  recordInventoryCount: vi.fn(),
+  applyInventoryAdjustments: vi.fn(),
+  listInventorySessions: remote.listInventorySessions,
+  listInventorySessionCounts: remote.listInventorySessionCounts,
 }));
 
 function setOnline(value: boolean) {
@@ -86,6 +99,8 @@ beforeEach(async () => {
   // this they would inherit the previous test's fake "now".
   vi.useRealTimers();
   remote.listProducts.mockResolvedValue([]);
+  remote.listInventorySessions.mockResolvedValue([]);
+  remote.listInventorySessionCounts.mockResolvedValue([]);
   setOfflineSession("pharmacy-1", "user-1");
   setOnline(true);
   const db = getDb();
