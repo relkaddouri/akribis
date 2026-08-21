@@ -101,7 +101,7 @@ export function ClientPicker({
 
   return (
     <div ref={containerRef} className="relative">
-      <div className="flex items-center gap-sp-sm rounded-lg bg-muted/60 px-sp-md py-sp-sm transition-colors focus-within:bg-muted">
+      <div className="flex items-center gap-sp-sm rounded-xl bg-card px-sp-md py-sp-xs shadow-soft transition-shadow focus-within:ring-2 focus-within:ring-ring">
         <Search className="size-5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
         <input
           value={search}

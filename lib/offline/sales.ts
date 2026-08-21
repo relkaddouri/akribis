@@ -15,21 +15,32 @@ import { enqueue } from "@/lib/offline/sync-queue";
 import { processQueue } from "@/lib/offline/sync-engine";
 import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales";
 import { round2 } from "@/lib/pos/cart";
+import { calculerPartage, type LigneRemboursable } from "@/lib/pos/tiers-payant";
 import type { Receipt, ReceiptLine } from "@/lib/server/sales";
 
 export type { Receipt, ReceiptLine } from "@/lib/server/sales";
 
-/** `clientName` is optimistic-display-only — the server resolves it itself from `clientId`. */
-export type OfflineCreateSaleInput = CreateSaleInput & { clientName?: string };
+/**
+ * `clientName` et `insurerTaux` servent uniquement à l'affichage optimiste
+ * : le serveur résout le client depuis `clientId` et relit le taux depuis
+ * l'organisme, il n'accepte ni l'un ni l'autre du client.
+ */
+export type OfflineCreateSaleInput = CreateSaleInput & {
+  clientName?: string;
+  insurerTaux?: number;
+};
 
 export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt> {
-  const { clientName, ...rest } = input;
+  const { clientName, insurerTaux, ...rest } = input;
   const parsed = createSaleSchema.parse(rest);
   const db = getDb();
   const id = crypto.randomUUID();
   const clientTimestamp = new Date();
 
   const items: ReceiptLine[] = [];
+  /** Les mêmes lignes, avec de quoi calculer la part de l'organisme. */
+  const lignesPartage: LigneRemboursable[] = [];
+
   for (const line of parsed.items) {
     const product = await db.products.get(line.productId);
     if (!product) {
@@ -47,7 +58,27 @@ export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt
       unitPrice: product.price,
       lineTotal: round2(product.price * line.quantity),
     });
+    lignesPartage.push({
+      unitPrice: product.price,
+      quantity: line.quantity,
+      remboursable: product.remboursable,
+      baseRemboursement: product.baseRemboursement,
+    });
   }
+
+  /**
+   * Le même partage que celui que le serveur refera, calculé ici sur le
+   * cache local pour que le ticket imprimé hors ligne annonce déjà les
+   * deux montants.
+   *
+   * Le serveur reste l'autorité : il recalcule à partir de ses propres
+   * données produit et du taux de l'organisme, sans jamais lire ceci.
+   * `insurerTaux` n'est d'ailleurs pas envoyé — il ne sert qu'à ce ticket,
+   * comme `clientName`, parce que la liste des organismes n'est pas mise
+   * en cache hors ligne alors que le comptoir l'a sous les yeux.
+   */
+  const partage = calculerPartage(lignesPartage, insurerTaux ?? null);
+
 
   // Optimistic local decrement, so the next screen (and a concurrent
   // scan in the same cart) sees reduced stock immediately.
@@ -89,7 +120,9 @@ export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt
     id,
     createdAt: clientTimestamp,
     paymentMethod: parsed.paymentMethod,
-    totalAmount: round2(items.reduce((sum, item) => sum + item.lineTotal, 0)),
+    totalAmount: partage.total,
+    partClient: partage.partClient,
+    partAssurance: partage.partAssurance,
     clientName: clientName ?? null,
     items,
     // Nothing to compare against yet: this ticket *is* the reference. Any

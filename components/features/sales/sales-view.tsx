@@ -15,6 +15,11 @@ import { Label } from "@/components/ui/label";
 import { DataTable, type DataTableColumn, type DataTableFilter } from "@/components/ui/data-table";
 import { DashboardHeader } from "@/components/features/dashboard/dashboard-header";
 import { SaleReturnBadge } from "@/components/features/sales/sale-return-badge";
+import {
+  LIBELLES_CREANCE,
+  STATUTS_CREANCE,
+  StatutCreanceBadge,
+} from "@/components/features/sales/statut-creance-badge";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -60,6 +65,25 @@ const columns: DataTableColumn<SaleListItem>[] = [
     cell: (sale) => PAYMENT_LABELS[sale.paymentMethod],
   },
   {
+    id: "creance",
+    header: "Statut créance",
+    // Trié pour que les créances à traiter remontent avant les ventes
+    // ordinaires : c'est la raison d'être de la colonne.
+    sortValue: (sale) => (sale.statutCreance === "AUCUNE" ? "zzz" : sale.statutCreance),
+    cell: (sale) =>
+      sale.statutCreance === "AUCUNE" ? (
+        <span className="text-muted-foreground">—</span>
+      ) : (
+        <div className="flex flex-col items-start gap-0.5">
+          <StatutCreanceBadge statut={sale.statutCreance} />
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {sale.insurerNom ? `${sale.insurerNom} · ` : ""}
+            {formatMad(sale.montantPartAssurance)}
+          </span>
+        </div>
+      ),
+  },
+  {
     id: "status",
     header: "Statut",
     sortValue: (sale) => sale.returnStatus,
@@ -87,6 +111,17 @@ const filters: DataTableFilter<SaleListItem>[] = [
       value: status,
     })),
     predicate: (sale, value) => sale.returnStatus === value,
+  },
+  {
+    id: "creance",
+    label: "Statut créance",
+    // « Aucune » d'abord : filtrer sur les ventes sans tiers payant est le
+    // besoin symétrique, et il faut pouvoir revenir au cas ordinaire.
+    options: [
+      { label: "Sans tiers payant", value: "AUCUNE" },
+      ...STATUTS_CREANCE.map((statut) => ({ label: LIBELLES_CREANCE[statut], value: statut })),
+    ],
+    predicate: (sale, value) => sale.statutCreance === value,
   },
   {
     id: "payment",

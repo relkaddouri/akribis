@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/lib/db/generated/client";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { baseAppliquee } from "@/lib/pos/tiers-payant";
 import {
   computeReturnStatus,
   formatSaleReference,
@@ -24,6 +25,15 @@ import {
 
 type PaymentMethodValue = "CASH" | "CARD" | "CREDIT";
 
+/** Les six états d'une créance de tiers payant — voir l'enum du schéma. */
+export type StatutCreanceValue =
+  | "AUCUNE"
+  | "EN_ATTENTE_BORDEREAU"
+  | "DANS_BORDEREAU"
+  | "ACCEPTEE"
+  | "REJETEE"
+  | "PAYEE";
+
 export type SaleListItem = {
   id: string;
   reference: string;
@@ -33,9 +43,15 @@ export type SaleListItem = {
   paymentMethod: PaymentMethodValue;
   returnStatus: SaleReturnStatusValue;
   invoiced: boolean;
+  /** Tiers payant. `AUCUNE` sur une vente réglée entièrement par le client. */
+  statutCreance: StatutCreanceValue;
+  montantPartAssurance: number;
+  insurerNom: string | null;
 };
 
 export type SaleDetail = SaleListItem & {
+  /** La part réglée au comptoir. La liste n'en a pas besoin, la fiche si. */
+  montantPartClient: number;
   clientPhone: string | null;
   invoiceNumber: string | null;
   lines: Array<{
@@ -48,7 +64,14 @@ export type SaleDetail = SaleListItem & {
     lineTotal: number;
     /** Product-level reimbursement info, shown on the detail screen. */
     remboursable: boolean;
+    /**
+     * La base réellement appliquée à la vente, et non celle que porte le
+     * produit aujourd'hui. Retombe sur celle du produit pour les ventes
+     * antérieures à l'instantané.
+     */
     baseRemboursement: number | null;
+    /** Ce que cette ligne réclame à l'organisme. 0 sans tiers payant. */
+    montantPartAssurance: number;
   }>;
   returns: Array<{
     id: string;
@@ -119,7 +142,10 @@ export async function listSales(filters?: SalesFilters): Promise<SaleListItem[]>
       paymentMethod: true,
       returnStatus: true,
       invoiceId: true,
+      statutCreance: true,
+      montantPartAssurance: true,
       client: { select: { name: true } },
+      insurer: { select: { nom: true } },
     },
   });
 
@@ -132,6 +158,9 @@ export async function listSales(filters?: SalesFilters): Promise<SaleListItem[]>
     paymentMethod: sale.paymentMethod as PaymentMethodValue,
     returnStatus: toStatus(sale.returnStatus),
     invoiced: sale.invoiceId !== null,
+    statutCreance: sale.statutCreance as StatutCreanceValue,
+    montantPartAssurance: Number(sale.montantPartAssurance),
+    insurerNom: sale.insurer?.nom ?? null,
   }));
 }
 
@@ -146,6 +175,7 @@ export async function listClientSales(clientId: string): Promise<ClientSaleListI
     orderBy: { createdAt: "desc" },
     include: {
       client: { select: { name: true } },
+      insurer: { select: { nom: true } },
       items: { include: { product: { select: { name: true } } } },
     },
   });
@@ -168,6 +198,9 @@ export async function listClientSales(clientId: string): Promise<ClientSaleListI
       paymentMethod: sale.paymentMethod as PaymentMethodValue,
       returnStatus: toStatus(sale.returnStatus),
       invoiced: sale.invoiceId !== null,
+      statutCreance: sale.statutCreance as StatutCreanceValue,
+      montantPartAssurance: Number(sale.montantPartAssurance),
+      insurerNom: sale.insurer?.nom ?? null,
       summary,
     };
   });
@@ -180,6 +213,7 @@ export async function getSale(id: string): Promise<SaleDetail | null> {
     where: { id, pharmacyId: user.pharmacyId },
     include: {
       client: { select: { name: true, phone: true } },
+      insurer: { select: { nom: true } },
       invoice: { select: { number: true } },
       items: {
         include: {
@@ -201,11 +235,15 @@ export async function getSale(id: string): Promise<SaleDetail | null> {
     reference: formatSaleReference(sale.id),
     createdAt: sale.createdAt,
     clientName: sale.client?.name ?? null,
+    montantPartClient: Number(sale.montantPartClient),
     clientPhone: sale.client?.phone ?? null,
     totalAmount: Number(sale.totalAmount),
     paymentMethod: sale.paymentMethod as PaymentMethodValue,
     returnStatus: toStatus(sale.returnStatus),
     invoiced: sale.invoiceId !== null,
+    statutCreance: sale.statutCreance as StatutCreanceValue,
+    montantPartAssurance: Number(sale.montantPartAssurance),
+    insurerNom: sale.insurer?.nom ?? null,
     invoiceNumber: sale.invoice?.number ?? null,
     lines: sale.items.map((item) => ({
       saleItemId: item.id,
@@ -216,8 +254,13 @@ export async function getSale(id: string): Promise<SaleDetail | null> {
       unitPrice: Number(item.unitPrice),
       lineTotal: Number(item.unitPrice) * item.quantity,
       remboursable: item.product.remboursable,
-      baseRemboursement:
+      // L'instantané d'abord ; le produit ne sert que de repli pour les
+      // ventes d'avant, où il n'y a rien de mieux.
+      baseRemboursement: baseAppliquee(
+        item.baseRemboursement === null ? null : Number(item.baseRemboursement),
         item.product.baseRemboursement === null ? null : Number(item.product.baseRemboursement),
+      ),
+      montantPartAssurance: Number(item.montantPartAssurance),
     })),
     returns: sale.returns.map((entry) => ({
       id: entry.id,
