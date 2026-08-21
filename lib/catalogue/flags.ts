@@ -23,3 +23,19 @@ export type CatalogueFlag = (typeof TOGGLEABLE_FLAGS)[number];
 export function isToggleableFlag(value: string): value is CatalogueFlag {
   return (TOGGLEABLE_FLAGS as readonly string[]).includes(value);
 }
+
+/**
+ * Le `type_action` à journaliser pour une bascule de drapeau.
+ *
+ * La désactivation d'une fiche n'est pas un changement de drapeau parmi
+ * d'autres : c'est elle qui la retire des recherches de toutes les
+ * pharmacies de la plateforme, et c'est elle qu'on viendra chercher dans
+ * le journal. Elle a donc son propre type — et son inverse aussi, sans
+ * quoi « qui a réactivé cette fiche » resterait sans réponse.
+ */
+export function typeActionDuDrapeau(flag: CatalogueFlag, value: boolean): string {
+  if (flag === "actifCatalogue") {
+    return value ? "catalogue.produit.reactive" : "catalogue.produit.desactive";
+  }
+  return "catalogue.produit.drapeau_modifie";
+}

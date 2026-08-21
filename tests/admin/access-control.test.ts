@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ADMIN_CATALOGUE_PATH,
+  ADMIN_JOURNAL_PATH,
   canAccess,
   defaultPathForRole,
   isAdminOnlyPath,
@@ -22,6 +23,9 @@ const ADMIN_PAGES = [
   "/admin/catalogue/nouveau",
   "/admin/catalogue/import",
   "/admin/catalogue/8f3c1a2e-0000-4000-8000-000000000000",
+  // Le journal d'audit : il dit qui a fait quoi sur le référentiel national,
+  // il n'a rien à faire sous les yeux d'une officine.
+  ADMIN_JOURNAL_PATH,
 ];
 
 describe("le rôle admin_akribis", () => {

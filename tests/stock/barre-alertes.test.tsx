@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { renderAvecProviders } from "@/tests/fixtures/render-avec-providers";
 import { StockAlertBar } from "@/components/features/stock/stock-alert-bar";
@@ -19,6 +19,20 @@ import type { ProductForAlerts } from "@/lib/stock/alerts";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 
 const AUJOURD_HUI = new Date("2026-08-20T10:00:00.000Z");
+
+/**
+ * Horloge figée.
+ *
+ * Les assertions sur « dans 8 jours » passaient par l'horloge réelle : le
+ * composant ne reçoit pas de date injectable, contrairement aux fonctions
+ * pures testées plus bas. Le fichier virait donc au rouge tout seul au
+ * changement de date — ce qui est arrivé, un jour après son écriture.
+ */
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(AUJOURD_HUI);
+});
+afterAll(() => vi.useRealTimers());
 
 function produit(overrides: Partial<ProductForAlerts> = {}): ProductForAlerts {
   return {

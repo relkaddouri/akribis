@@ -26,7 +26,11 @@ import {
 } from "@/lib/validations/catalogue";
 import { parseSpreadsheet, SpreadsheetError } from "@/lib/catalogue/spreadsheet";
 import { renumber } from "@/lib/catalogue/photo-rules";
-import { isToggleableFlag, type CatalogueFlag } from "@/lib/catalogue/flags";
+import {
+  isToggleableFlag,
+  typeActionDuDrapeau,
+  type CatalogueFlag,
+} from "@/lib/catalogue/flags";
 import {
   autoMapColumns,
   missingRequiredFields,
@@ -36,6 +40,7 @@ import {
   type ImportDuplicate,
   type ImportRejection,
 } from "@/lib/catalogue/import-mapping";
+import { ENTITES, TYPES_ACTION, journaliser, type TypeAction } from "@/lib/audit/event-log";
 import {
   toCatalogueRecord as toRecord,
   type CatalogueProduitRecord,
@@ -122,7 +127,7 @@ function duplicateBarcodeMessage(error: unknown, codeBarres: string | null): str
 export async function createCatalogueProduit(
   input: CatalogueFormInput,
 ): Promise<CatalogueActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const parsed = catalogueFormSchema.safeParse(input);
   if (!parsed.success) {
@@ -132,8 +137,21 @@ export async function createCatalogueProduit(
   const { photos, ...fields } = parsed.data;
 
   try {
-    const produit = await prisma.catalogueProduit.create({
-      data: { ...fields, photos: { create: renumber(photos) } },
+    // Fiche et entrée de journal dans la même transaction : une fiche
+    // créée sans son entrée serait un trou, et un journal troué ne se
+    // distingue pas d'un journal faux.
+    const produit = await prisma.$transaction(async (tx) => {
+      const cree = await tx.catalogueProduit.create({
+        data: { ...fields, photos: { create: renumber(photos) } },
+      });
+      await journaliser(tx, {
+        acteur: admin,
+        typeAction: TYPES_ACTION.catalogueProduitCree,
+        entite: ENTITES.catalogueProduit,
+        entiteId: cree.id,
+        apres: cree,
+      });
+      return cree;
     });
     revalidatePath(ADMIN_CATALOGUE_PATH);
     return { ok: true, id: produit.id };
@@ -148,7 +166,7 @@ export async function updateCatalogueProduit(
   id: string,
   input: CatalogueFormInput,
 ): Promise<CatalogueActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const parsed = catalogueFormSchema.safeParse(input);
   if (!parsed.success) {
@@ -162,13 +180,25 @@ export async function updateCatalogueProduit(
     // fields: the form hands over the list it wants to end up with, and
     // reconciling row by row would be more code for an identical result
     // on a set that never exceeds six.
-    await prisma.$transaction([
-      prisma.catalogueProduitPhoto.deleteMany({ where: { catalogueProduitId: id } }),
-      prisma.catalogueProduit.update({
+    // Forme interactive plutôt que le tableau : l'état « avant » doit être
+    // lu à l'intérieur de la transaction, sinon c'est un état d'il y a un
+    // instant qu'on archiverait, pas celui que la mise à jour a remplacé.
+    await prisma.$transaction(async (tx) => {
+      const avant = await tx.catalogueProduit.findUnique({ where: { id } });
+      await tx.catalogueProduitPhoto.deleteMany({ where: { catalogueProduitId: id } });
+      const apres = await tx.catalogueProduit.update({
         where: { id },
         data: { ...fields, photos: { create: renumber(photos) } },
-      }),
-    ]);
+      });
+      await journaliser(tx, {
+        acteur: admin,
+        typeAction: TYPES_ACTION.catalogueProduitModifie,
+        entite: ENTITES.catalogueProduit,
+        entiteId: id,
+        avant,
+        apres,
+      });
+    });
     revalidatePath(ADMIN_CATALOGUE_PATH);
     revalidatePath(`${ADMIN_CATALOGUE_PATH}/${id}`);
     return { ok: true, id };
@@ -197,7 +227,7 @@ export async function setCatalogueProduitFlag(
   flag: CatalogueFlag,
   value: boolean,
 ): Promise<CatalogueActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   // Re-checked server-side even though the parameter is typed: the type
   // is erased at the network boundary, and this action is reachable by POST.
@@ -205,7 +235,21 @@ export async function setCatalogueProduitFlag(
     return { ok: false, error: "Champ non modifiable." };
   }
 
-  await prisma.catalogueProduit.update({ where: { id }, data: { [flag]: value } });
+  await prisma.$transaction(async (tx) => {
+    const avant = await tx.catalogueProduit.findUnique({
+      where: { id },
+      select: { [flag]: true },
+    });
+    await tx.catalogueProduit.update({ where: { id }, data: { [flag]: value } });
+    await journaliser(tx, {
+      acteur: admin,
+      typeAction: typeActionDuDrapeau(flag, value) as TypeAction,
+      entite: ENTITES.catalogueProduit,
+      entiteId: id,
+      avant,
+      apres: { [flag]: value },
+    });
+  });
   revalidatePath(ADMIN_CATALOGUE_PATH);
   revalidatePath(`${ADMIN_CATALOGUE_PATH}/${id}`);
   return { ok: true, id };

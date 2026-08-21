@@ -1116,3 +1116,45 @@ model ProductLot {
   @@index([datePeremption])
   @@map("product_lots")
 }
+
+/// Journal d'audit, en ajout seul.
+///
+/// Créé ici pour la première fois : ce projet n'avait aucun mécanisme de
+/// journalisation, sous ce nom ni sous un autre — un TODO le constatait
+/// déjà dans lib/server/inventory.ts. Les modules suivants doivent
+/// réutiliser cette table plutôt que d'en ouvrir une seconde.
+model EventLog {
+  id String @id @default(uuid())
+
+  /// Qui a agi. Identifiant Supabase, volontairement SANS clé étrangère
+  /// vers `users` : un administrateur Akribis n'a pas de ligne là-bas, il
+  /// n'appartient à aucune pharmacie. Et l'e-mail est recopié plutôt que
+  /// joint, pour que le journal reste lisible même si le compte disparaît.
+  acteurId    String @map("acteur_id")
+  acteurEmail String @map("acteur_email")
+  acteurRole  String @map("acteur_role")
+
+  /// L'action précise, en vocabulaire pointé : `catalogue.produit.cree`.
+  typeAction String @map("type_action")
+
+  /// Sur quoi elle a porté. Table et identifiant en texte, sans relation :
+  /// un journal qui disparaîtrait avec ce qu'il décrit ne servirait à rien.
+  entite   String
+  entiteId String @map("entite_id")
+
+  /// Portée. Nulle pour une action nationale — l'Admin catalogue n'agit
+  /// pour aucune officine en particulier.
+  pharmacyId String? @map("pharmacy_id")
+
+  /// L'état avant et après, quand la notion a un sens. `avant` est nul à
+  /// la création, `apres` le serait à une suppression.
+  avant Json?
+  apres Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([typeAction, createdAt])
+  @@index([entite, entiteId])
+  @@index([acteurId, createdAt])
+  @@map("event_log")
+}
