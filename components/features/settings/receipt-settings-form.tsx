@@ -123,6 +123,8 @@ export function ReceiptSettingsForm({
               address: pharmacy.address,
               phone: pharmacy.phone,
               ice: pharmacy.ice,
+              inpe: null,
+              patente: null,
               logoUrl: pharmacy.logoUrl,
               showLogo,
               legalNotice: legalNotice.trim() || null,

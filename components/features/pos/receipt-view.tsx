@@ -65,6 +65,8 @@ export function ReceiptView({ receipt, onNewSale }: { receipt: Receipt; onNewSal
                 address: null,
                 phone: null,
                 ice: null,
+                inpe: null,
+                patente: null,
                 logoUrl: null,
                 showLogo: false,
                 legalNotice: null,

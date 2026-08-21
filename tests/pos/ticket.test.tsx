@@ -22,6 +22,8 @@ vi.mock("@/lib/server/pharmacy", () => ({
     address: "APPT 5, TILILA AGADIR",
     phone: "0707114336",
     ice: "001234567000012",
+    inpe: null,
+    patente: null,
     logoUrl: null,
     showLogo: false,
     legalNotice: "TVA non applicable",

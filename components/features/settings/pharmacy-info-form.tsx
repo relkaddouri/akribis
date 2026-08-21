@@ -63,6 +63,14 @@ export function PharmacyInfoForm({ pharmacy }: { pharmacy: PharmacySettings }) {
           </p>
         </div>
         <div className="space-y-2">
+          <Label htmlFor="patente">N° de patente</Label>
+          <Input id="patente" name="patente" defaultValue={pharmacy.patente ?? ""} />
+          <p className="text-xs text-muted-foreground">
+            La taxe professionnelle de l&apos;officine — elle figure sur les bordereaux, au même
+            titre que l&apos;ICE et l&apos;INPE.
+          </p>
+        </div>
+        <div className="space-y-2">
           <Label htmlFor="loyaltyRate">Taux de fidélité</Label>
           <Input
             id="loyaltyRate"

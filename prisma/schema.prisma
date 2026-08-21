@@ -22,6 +22,9 @@ model Pharmacy {
   /// Identifie l'officine auprès des organismes de tiers payant ; il figure
   /// sur les bordereaux qu'on leur adresse.
   inpe            String?
+  /// N° de patente — la taxe professionnelle de l'officine. Figure sur les
+  /// bordereaux adressés aux organismes, au même titre que l'ICE et l'INPE.
+  patente         String?
   logoUrl         String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
   receiptSettings Json?    @map("receipt_settings")
@@ -51,6 +54,7 @@ model Pharmacy {
 
   pharmacyStock PharmacyStock[]
   organismes    OrganismeTiersPayant[]
+  bordereaus    Bordereau[]
 
   @@map("pharmacies")
 }
@@ -323,6 +327,7 @@ model Sale {
   items              SaleItem[]
   invoice            Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   insurer            OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
+  bordereauLignes    BordereauVente[]
   returns            SaleReturn[]
   clientTransactions ClientTransaction[]
 
@@ -1231,8 +1236,9 @@ model OrganismeTiersPayant {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  ventes   Sale[]
+  pharmacy   Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  ventes     Sale[]
+  bordereaux Bordereau[]
 
   @@unique([pharmacyId, code])
   @@index([pharmacyId, actif])
@@ -1252,4 +1258,79 @@ enum StatutCreance {
   PAYEE                @map("payee")
 
   @@map("statut_creance")
+}
+
+/// Un bordereau de tiers payant : le récapitulatif adressé à un organisme
+/// pour se faire rembourser un lot de ventes.
+model Bordereau {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+  insurerId  String @map("insurer_id")
+
+  /// Numéro d'ordre de l'officine, ex. BOR-2026-0001.
+  numero String
+
+  /// La période couverte, bornes incluses.
+  periodeDebut DateTime @map("periode_debut") @db.Date
+  periodeFin   DateTime @map("periode_fin") @db.Date
+
+  statut StatutBordereau @default(BROUILLON)
+
+  /// Ce que l'organisme a réellement versé, saisi au rapprochement.
+  /// Nul tant qu'aucun paiement n'a été enregistré.
+  montantRecu       Decimal?  @map("montant_recu") @db.Decimal(10, 2)
+  dateRapprochement DateTime? @map("date_rapprochement")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  insurer  OrganismeTiersPayant @relation(fields: [insurerId], references: [id])
+  lignes   BordereauVente[]
+
+  @@unique([pharmacyId, numero])
+  @@index([pharmacyId, statut])
+  @@index([insurerId])
+  @@map("bordereaux")
+}
+
+/// Une vente dans un bordereau.
+model BordereauVente {
+  id          String @id @default(uuid())
+  bordereauId String @map("bordereau_id")
+  saleId      String @map("sale_id")
+
+  /// Le montant réclamé pour cette vente, figé à l'inclusion — la vente
+  /// peut être remboursée partiellement, ou son organisme changer de taux.
+  montantReclame Decimal @map("montant_reclame") @db.Decimal(10, 2)
+
+  statut     StatutLigneBordereau @default(EN_ATTENTE)
+  /// Pourquoi l'organisme a refusé. Texte libre, écrit par l'officine.
+  motifRejet String?              @map("motif_rejet")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  bordereau Bordereau @relation(fields: [bordereauId], references: [id], onDelete: Cascade)
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@unique([bordereauId, saleId])
+  @@index([saleId])
+  @@map("bordereau_ventes")
+}
+
+enum StatutBordereau {
+  BROUILLON     @map("brouillon")
+  ENVOYE        @map("envoye")
+  EN_TRAITEMENT @map("en_traitement")
+  CLOTURE       @map("cloture")
+
+  @@map("statut_bordereau")
+}
+
+enum StatutLigneBordereau {
+  EN_ATTENTE @map("en_attente")
+  ACCEPTEE   @map("acceptee")
+  REJETEE    @map("rejetee")
+
+  @@map("statut_ligne_bordereau")
 }
