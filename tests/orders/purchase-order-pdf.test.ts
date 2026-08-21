@@ -7,6 +7,8 @@ const branding = {
   address: "12 avenue Hassan II, Casablanca",
   phone: "0522000000",
   ice: "001234567000089",
+  inpe: null,
+  patente: null,
   logoUrl: null,
   showLogo: false,
   legalNotice: null,

@@ -7,6 +7,7 @@ import {
   BarChart3,
   Boxes,
   ClipboardList,
+  FileSpreadsheet,
   FileText,
   LayoutDashboard,
   LifeBuoy,
@@ -48,6 +49,13 @@ const MENU_ITEMS: NavItem[] = [
 ];
 
 const INVENTORY_ITEM: NavItem = { label: "Inventaire", href: "/inventaire", icon: Boxes };
+
+/** Le tiers payant : ce que les organismes doivent encore à l'officine. */
+const BORDEREAUX_ITEM: NavItem = {
+  label: "Bordereaux",
+  href: "/bordereaux",
+  icon: FileSpreadsheet,
+};
 
 const REPORTS_ITEM: NavItem = { label: "Rapports", href: "/dashboard/stats", icon: BarChart3 };
 
@@ -216,6 +224,11 @@ export function DashboardSidebar({
               <SidebarLink
                 item={INVENTORY_ITEM}
                 active={isActivePath(pathname, INVENTORY_ITEM.href)}
+                collapsed={collapsed}
+              />
+              <SidebarLink
+                item={BORDEREAUX_ITEM}
+                active={isActivePath(pathname, BORDEREAUX_ITEM.href)}
                 collapsed={collapsed}
               />
               {role === "owner" && (

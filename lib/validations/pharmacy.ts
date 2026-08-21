@@ -19,6 +19,7 @@ export const pharmacyInfoSchema = z.object({
   ice: optionalTrimmed(),
   orderNumber: optionalTrimmed(),
   inpe: optionalTrimmed(),
+  patente: optionalTrimmed(),
 });
 
 export type PharmacyInfoInput = z.input<typeof pharmacyInfoSchema>;
