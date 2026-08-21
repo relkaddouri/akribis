@@ -299,11 +299,30 @@ model Sale {
   /// line of every sale.
   returnStatus SaleReturnStatus @default(NONE) @map("return_status")
 
-  pharmacy           Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  user               User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Tiers payant. `insurerId` nul = vente payée intégralement par le client.
+  insurerId String? @map("insurer_id")
+
+  /// La répartition du `totalAmount`, figée au moment de la vente.
+  ///
+  /// Les deux montants sont stockés plutôt que recalculés : le taux d'un
+  /// organisme change avec les conventions, et une vente de l'an dernier
+  /// doit rester lisible avec le taux qui s'appliquait ce jour-là.
+  ///
+  /// Invariant : `montantPartClient + montantPartAssurance == totalAmount`,
+  /// au centime près. C'est la part client qui est obtenue par
+  /// soustraction — voir lib/pos/tiers-payant.ts — de sorte qu'aucun
+  /// arrondi ne puisse creuser d'écart.
+  montantPartClient    Decimal @default(0) @map("montant_part_client") @db.Decimal(10, 2)
+  montantPartAssurance Decimal @default(0) @map("montant_part_assurance") @db.Decimal(10, 2)
+
+  statutCreance StatutCreance @default(AUCUNE) @map("statut_creance")
+
+  pharmacy           Pharmacy              @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client             Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  user               User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   items              SaleItem[]
-  invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoice            Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  insurer            OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
   returns            SaleReturn[]
   clientTransactions ClientTransaction[]
 
@@ -311,19 +330,35 @@ model Sale {
   @@index([clientId])
   @@index([userId])
   @@index([invoiceId])
+  /// Le filtre de la page Ventes : « quelles créances attendent un bordereau ».
+  @@index([pharmacyId, statutCreance])
   @@map("sales")
 }
 
 model SaleItem {
-  id               String  @id @default(uuid())
-  pharmacyId       String  @map("pharmacy_id")
-  saleId           String  @map("sale_id")
-  productId        String  @map("product_id")
-  quantity         Int
-  unitPrice        Decimal @map("unit_price") @db.Decimal(10, 2)
+  id         String  @id @default(uuid())
+  pharmacyId String  @map("pharmacy_id")
+  saleId     String  @map("sale_id")
+  productId  String  @map("product_id")
+  quantity   Int
+  unitPrice  Decimal @map("unit_price") @db.Decimal(10, 2)
+
+  /// Le tiers payant de cette ligne, figé au moment de la vente.
+  ///
+  /// Instantanés, et non des lectures du produit : la base de
+  /// remboursement et le taux de l'organisme changent avec les
+  /// conventions, et une vente de l'an dernier doit rester lisible avec les
+  /// valeurs qui s'appliquaient ce jour-là. La fiche affichait jusqu'ici la
+  /// base ACTUELLE du produit, ce qui devenait faux à la première
+  /// correction du catalogue.
+  ///
+  /// Nuls sur les ventes antérieures à ces colonnes : la fiche retombe
+  /// alors sur l'ancien affichage, faute de mieux.
+  baseRemboursement    Decimal? @map("base_remboursement") @db.Decimal(10, 2)
+  montantPartAssurance Decimal  @default(0) @map("montant_part_assurance") @db.Decimal(10, 2)
   /// Cumulative quantity returned so far across one or more returns —
   /// the cap that stops a line being refunded more than it was sold.
-  returnedQuantity Int     @default(0) @map("returned_quantity")
+  returnedQuantity     Int      @default(0) @map("returned_quantity")
 
   pharmacy    Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   sale        Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -1197,8 +1232,24 @@ model OrganismeTiersPayant {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  ventes   Sale[]
 
   @@unique([pharmacyId, code])
   @@index([pharmacyId, actif])
   @@map("organismes_tiers_payant")
+}
+
+/// Le cycle de vie d'une créance de tiers payant.
+///
+/// `AUCUNE` pour une vente sans organisme — c'est la valeur par défaut, et
+/// celle de toutes les ventes antérieures au tiers payant.
+enum StatutCreance {
+  AUCUNE               @map("aucune")
+  EN_ATTENTE_BORDEREAU @map("en_attente_bordereau")
+  DANS_BORDEREAU       @map("dans_bordereau")
+  ACCEPTEE             @map("acceptee")
+  REJETEE              @map("rejetee")
+  PAYEE                @map("payee")
+
+  @@map("statut_creance")
 }

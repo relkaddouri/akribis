@@ -16,7 +16,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/client";
-import { requireOwner } from "@/lib/auth/session";
+import { requireOwner, requireUser } from "@/lib/auth/session";
 import { organismeSchema, type OrganismeInput } from "@/lib/validations/pharmacy";
 
 const SETTINGS_PATH = "/parametres";
@@ -42,6 +42,35 @@ export async function listOrganismes(): Promise<OrganismeRecord[]> {
     // désactivés restent visibles, sans quoi on ne pourrait pas les
     // remettre en service.
     orderBy: [{ actif: "desc" }, { nom: "asc" }],
+  });
+
+  return organismes.map((organisme) => ({
+    id: organisme.id,
+    nom: organisme.nom,
+    code: organisme.code,
+    tauxCouverture: Number(organisme.tauxCouverture),
+    formatBordereau: organisme.formatBordereau,
+    actif: organisme.actif,
+  }));
+}
+
+/**
+ * Les organismes actifs, pour le comptoir.
+ *
+ * `requireUser()` et non `requireOwner()` : un assistant tient la caisse et
+ * doit pouvoir choisir l'organisme d'un client, sans pour autant pouvoir
+ * en créer, en modifier ou en désactiver un. Même distinction que
+ * `getReceiptBranding()` dans lib/server/pharmacy.ts — consulter n'est pas
+ * administrer.
+ *
+ * Les désactivés sont exclus : c'est tout l'objet de la désactivation.
+ */
+export async function listOrganismesActifs(): Promise<OrganismeRecord[]> {
+  const user = await requireUser();
+
+  const organismes = await prisma.organismeTiersPayant.findMany({
+    where: { pharmacyId: user.pharmacyId, actif: true },
+    orderBy: { nom: "asc" },
   });
 
   return organismes.map((organisme) => ({

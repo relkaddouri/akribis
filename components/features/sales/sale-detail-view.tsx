@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table";
 import { DashboardHeader } from "@/components/features/dashboard/dashboard-header";
 import { SaleReturnBadge } from "@/components/features/sales/sale-return-badge";
+import { StatutCreanceBadge } from "@/components/features/sales/statut-creance-badge";
 import { SaleReturnDialog } from "@/components/features/sales/sale-return-dialog";
 
 const PAYMENT_LABELS: Record<SaleDetail["paymentMethod"], string> = {
@@ -86,6 +87,15 @@ export function SaleDetailView({ sale }: { sale: SaleDetail }) {
                           {line.baseRemboursement !== null
                             ? ` · base ${line.baseRemboursement.toFixed(2)}`
                             : ""}
+                          {/* Ce que CETTE ligne réclame, lu sur l'instantané
+                              figé à la vente. La somme des lignes égale la
+                              part totale de la carte Tiers payant — c'est ce
+                              qui permet de rapprocher un bordereau ligne à
+                              ligne. Absent des ventes d'avant l'instantané,
+                              qui affichent 0 : la mention se tait alors. */}
+                          {line.montantPartAssurance > 0
+                            ? ` → ${formatMad(line.montantPartAssurance)}`
+                            : ""}
                         </Badge>
                       )}
                     </TableCell>
@@ -141,6 +151,37 @@ export function SaleDetailView({ sale }: { sale: SaleDetail }) {
               />
             </CardContent>
           </Card>
+
+          {/* Le tiers payant, sur sa propre carte et seulement s'il y en a
+              un. La fiche n'en disait rien : la liste annonçait « à mettre
+              en bordereau » et l'écran de détail restait muet — c'est
+              pourtant ici qu'on vient chercher combien réclamer, et à qui. */}
+          {sale.statutCreance !== "AUCUNE" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Tiers payant</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-sp-md">
+                <Field label="Organisme" value={sale.insurerNom ?? "—"} />
+                <Field
+                  label="Statut de la créance"
+                  value={<StatutCreanceBadge statut={sale.statutCreance} />}
+                />
+                <Field
+                  label="Encaissé au comptoir"
+                  value={<span className="tabular-nums">{formatMad(sale.montantPartClient)}</span>}
+                />
+                <Field
+                  label="À réclamer à l'organisme"
+                  value={
+                    <span className="tabular-nums font-medium text-foreground">
+                      {formatMad(sale.montantPartAssurance)}
+                    </span>
+                  }
+                />
+              </CardContent>
+            </Card>
+          )}
 
           {sale.returns.length > 0 && (
             <Card>

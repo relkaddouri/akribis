@@ -35,6 +35,11 @@ import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales"
 import { computeLoyaltyPoints, creditSaleMovement } from "@/lib/clients/account";
 import { addLoyaltyPoints, recordClientTransaction } from "@/lib/server/client-account";
 import type { PaymentMethod } from "@/lib/db/generated/enums";
+import {
+  calculerPartage,
+  partAssuranceLigne,
+  type LigneRemboursable,
+} from "@/lib/pos/tiers-payant";
 
 export type ReceiptLine = {
   productId: string;
@@ -67,6 +72,9 @@ export type Receipt = {
   clientName: string | null;
   items: ReceiptLine[];
   priceDrifts: PriceDrift[];
+  /** Le partage tiers payant. `partAssurance` vaut 0 sans organisme. */
+  partClient: number;
+  partAssurance: number;
 };
 
 export async function createSale(
@@ -100,6 +108,10 @@ export async function createSale(
     const productById = new Map(products.map((product) => [product.id, product]));
 
     const items: ReceiptLine[] = [];
+
+    /** Les mêmes lignes, augmentées de quoi calculer la part assurance. */
+
+    const lignesPartage: LigneRemboursable[] = [];
     const priceDrifts: PriceDrift[] = [];
 
     for (const item of parsed.items) {
@@ -145,9 +157,101 @@ export async function createSale(
         unitPrice,
         lineTotal: unitPrice * item.quantity,
       });
+
+      // Le statut remboursable et la base viennent d'ICI, du produit tel
+      // que la base le connait — jamais du panier. Le prix, lui, reste
+      // celui du ticket : c'est la regle de tarification du haut de ce
+      // fichier, et elle ne concerne pas le droit au remboursement.
+      lignesPartage.push({
+        unitPrice,
+        quantity: item.quantity,
+        remboursable: product.remboursable,
+        baseRemboursement:
+          product.baseRemboursement !== null ? Number(product.baseRemboursement) : null,
+      });
     }
 
     const totalAmount = items.reduce((sum, item) => sum + item.lineTotal, 0);
+
+
+    // L'organisme est reverifie comme le client : son identifiant vient
+
+    // d'un formulaire, il designerait celui d'une autre officine — ou un
+
+    // organisme desactive — tout aussi bien.
+
+    const insurer = parsed.insurerId
+
+      ? await tx.organismeTiersPayant.findFirst({
+
+          where: { id: parsed.insurerId, pharmacyId: user.pharmacyId, actif: true },
+
+          select: { id: true, tauxCouverture: true },
+
+        })
+
+      : null;
+
+    if (parsed.insurerId && !insurer) {
+
+      throw new Error("Organisme de tiers payant inconnu ou desactive.");
+
+    }
+
+
+    const taux = insurer ? Number(insurer.tauxCouverture) : null;
+
+
+    const partage = calculerPartage(lignesPartage, taux);
+
+
+
+    /**
+
+
+     * Ce que chaque ligne réclame, par identifiant de produit.
+
+
+     *
+
+
+     * `items` et `lignesPartage` sont construits ensemble, dans le même
+
+
+     * ordre — un produit ne peut pas figurer deux fois, `parsed.items`
+
+
+     * étant dédupliqué par le panier.
+
+
+     */
+
+
+    const partageParLigne = new Map(
+
+
+      items.map((item, index) => [
+
+
+        item.productId,
+
+
+        {
+
+
+          base: lignesPartage[index]!.baseRemboursement ?? null,
+
+
+          part: partAssuranceLigne(lignesPartage[index]!, taux),
+
+
+        },
+
+
+      ]),
+
+
+    );
 
     const sale = await tx.sale.create({
       data: {
@@ -159,6 +263,12 @@ export async function createSale(
         clientId: client?.id ?? null,
         paymentMethod: parsed.paymentMethod,
         totalAmount,
+        insurerId: insurer?.id ?? null,
+        montantPartClient: partage.partClient,
+        montantPartAssurance: partage.partAssurance,
+        // Une part assurance nulle ne cree aucune creance, meme si un
+        // organisme a ete choisi : il n'y aurait rien a reclamer.
+        statutCreance: partage.partAssurance > 0 ? "EN_ATTENTE_BORDEREAU" : "AUCUNE",
       },
     });
 
@@ -170,6 +280,11 @@ export async function createSale(
           productId: item.productId,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
+          // Figés ici : la base et la part réclamée pour CETTE ligne, à
+          // CE moment. Les relire plus tard sur le produit donnerait la
+          // valeur du jour, pas celle de la vente.
+          baseRemboursement: partageParLigne.get(item.productId)?.base ?? null,
+          montantPartAssurance: partageParLigne.get(item.productId)?.part ?? 0,
         },
       });
 
@@ -215,6 +330,8 @@ export async function createSale(
       createdAt: sale.createdAt,
       paymentMethod: parsed.paymentMethod,
       totalAmount,
+      partClient: partage.partClient,
+      partAssurance: partage.partAssurance,
       clientName: client?.name ?? null,
       items,
       priceDrifts,
