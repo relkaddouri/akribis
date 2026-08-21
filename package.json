@@ -12,6 +12,7 @@
     "verify:catalogue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/verify-catalogue.ts",
     "backfill:pharmacy-stock": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/backfill-pharmacy-stock.ts",
     "categorize:catalogue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/categorize-catalogue.ts",
+    "import:para": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/import-parapharmacie.ts",
     "admin:promote": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/promote-admin.ts",
     "test": "vitest run",
     "test:watch": "vitest",

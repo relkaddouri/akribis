@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { fireEvent, screen, within } from "@testing-library/react";
+import { renderAvecProviders } from "@/tests/fixtures/render-avec-providers";
 import { StockDetailView } from "@/components/features/stock/stock-detail-view";
 import { missingTvaFields, suggestedTva } from "@/lib/stock/tva";
 import type { ProductRecord } from "@/lib/server/products";
@@ -9,6 +9,7 @@ import type { StockSheet } from "@/lib/server/stock-entry";
 const setTva = vi.fn(async () => ({ ok: true as const }));
 vi.mock("@/lib/server/stock-entry", () => ({
   setProductTva: (...args: unknown[]) => setTva(...(args as [])),
+  setProductActifLocalement: vi.fn(async () => ({ ok: true as const })),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 
@@ -31,11 +32,12 @@ function sheet(overrides: Partial<StockSheet> = {}): StockSheet {
 }
 
 const renderSheet = (p: ProductRecord, s: StockSheet) =>
-  render(<TooltipProvider><StockDetailView product={p} sheet={s} /></TooltipProvider>);
+  renderAvecProviders(<StockDetailView product={p} sheet={s} />);
 
 function ouvrirOnglet(nom: string) {
   const t = screen.getByRole("tab", { name: nom });
   fireEvent.mouseDown(t); fireEvent.focus(t); fireEvent.click(t);
+  return screen.getByRole("tabpanel");
 }
 
 describe("TVA manquante sur un produit remboursable", () => {
@@ -110,14 +112,124 @@ describe("prochaine péremption", () => {
     expect(screen.getByText("Aucun lot")).toBeInTheDocument(); // badge d'en-tête
   });
 
-  it("signale des lots sans date plutôt que d'inventer une échéance", () => {
+  it("n'invente aucune échéance quand rien n'est daté", () => {
     renderSheet(produit(), sheet({ lots: [lot("A", 5, null)] }));
-    expect(screen.getByText(/Aucun lot daté/)).toBeInTheDocument();
+    expect(screen.getByText(/Aucune date de péremption connue/)).toBeInTheDocument();
   });
 
-  it("n'affiche plus de date de péremption saisie à la main", () => {
-    renderSheet(produit({ nearestExpiryDate: new Date("2030-01-01") }), sheet({ lots: [] }));
-    expect(screen.queryByText("01/01/2030")).not.toBeInTheDocument();
+  /**
+   * Revient sur une décision antérieure — la fiche ignorait délibérément la
+   * date portée par le produit, pour ne dériver la péremption que des lots.
+   *
+   * Elle ne tenait plus : la barre d'alertes du stock, elle, lit cette
+   * date-là. Sur un produit sans lot daté, la fiche annonçait « hors
+   * alertes FEFO » pendant que la liste l'affichait en alerte à huit
+   * jours. Chacune avait raison de son point de vue, ce qui est la pire
+   * façon de se contredire. La fiche prend donc la plus proche des deux
+   * dates, et dit d'où elle vient quand aucun lot ne la porte.
+   */
+  it("reprend la date du produit quand aucun lot n'est daté", () => {
+    renderSheet(
+      produit({ nearestExpiryDate: new Date("2030-01-01") }),
+      sheet({ lots: [lot("A", 5, null)] }),
+    );
+    expect(screen.getByText("01/01/2030")).toBeInTheDocument();
+    expect(screen.getByText(/aucun lot daté/)).toBeInTheDocument();
+    expect(screen.getByText(/FEFO/)).toBeInTheDocument();
+  });
+
+  it("préfère le lot quand il périme avant la date du produit", () => {
+    renderSheet(
+      produit({ nearestExpiryDate: new Date("2030-01-01") }),
+      sheet({ lots: [lot("A", 5, new Date("2027-01-10"))] }),
+    );
+    expect(screen.getByText("10/01/2027")).toBeInTheDocument();
+    expect(screen.queryByText(/aucun lot daté/)).not.toBeInTheDocument();
+  });
+
+  it("préfère la date du produit quand elle tombe avant celle du lot", () => {
+    renderSheet(
+      produit({ nearestExpiryDate: new Date("2026-09-01") }),
+      sheet({ lots: [lot("A", 5, new Date("2027-01-10"))] }),
+    );
+    expect(screen.getByText("01/09/2026")).toBeInTheDocument();
+  });
+
+  it("affiche la valeur du stock", () => {
+    // 50 unités à 18 DH — la même valeur que celle annoncée par la barre.
+    renderSheet(produit(), sheet({}));
+    expect(screen.getByText("900 DH")).toBeInTheDocument();
+  });
+
+  it("dit pourquoi la valeur manque quand le prix reste à zéro", () => {
+    renderSheet(produit({ price: 0 }), sheet({}));
+    expect(screen.getByText(/le prix de vente reste à compléter/)).toBeInTheDocument();
+  });
+});
+
+const localPara = {
+  categorie: "PARAPHARMACEUTIQUE", marque: "Puressentiel",
+  categoriePrincipale: "Aromathérapie", sousCategorie: "Huiles essentielles",
+  sousSousCategorie: null, etiquettes: "massage", prixVenteIndicatif: 152.46,
+  description: "Huile de massage.", supplierNom: null, referenceInterne: null,
+  localisation: null, stockMinimum: 0, prixAchat: null, conditionnement: "Roller 75ml",
+  indications: null, contreIndicationConduite: null, contreIndicationAllaitement: null,
+  contreIndicationGrossesse: null,
+} as StockSheet["local"];
+
+describe("fiche stock d'un produit parapharmaceutique", () => {
+  it("montre marque et rayon au lieu du vocabulaire médicament", () => {
+    renderSheet(produit({ remboursable: false }), sheet({ local: localPara }));
+    const panneau = ouvrirOnglet("Identification");
+    expect(within(panneau).getByText("Marque")).toBeInTheDocument();
+    expect(within(panneau).getByText("Puressentiel")).toBeInTheDocument();
+    expect(within(panneau).getByText("Rayon")).toBeInTheDocument();
+    expect(within(panneau).queryByText("Forme galénique")).not.toBeInTheDocument();
+  });
+
+  it("montre le prix indicatif à la place du PPH", () => {
+    // `pph: null` : sinon la section « Autres informations renseignées »
+    // l'afficherait, à juste titre — c'est le sujet du test suivant.
+    renderSheet(produit({ remboursable: false, pph: null }), sheet({ local: localPara }));
+    const panneau = ouvrirOnglet("Prix et fiscalité");
+    expect(within(panneau).getByText("Prix indicatif catalogue")).toBeInTheDocument();
+    expect(within(panneau).getByText("152,46 DH")).toBeInTheDocument();
+    expect(within(panneau).queryByText("PPH")).not.toBeInTheDocument();
+    expect(within(panneau).getByText(/Prix libre/)).toBeInTheDocument();
+  });
+
+  it("masque posologie et contre-indications", () => {
+    renderSheet(produit({ remboursable: false }), sheet({ local: localPara }));
+    const panneau = ouvrirOnglet("Descriptif");
+    expect(within(panneau).getByText("Huile de massage.")).toBeInTheDocument();
+    expect(within(panneau).queryByText("Posologie")).not.toBeInTheDocument();
+    expect(within(panneau).queryByText("Contre-indications")).not.toBeInTheDocument();
+  });
+
+  it("affiche quand même un champ hors profil s'il porte une valeur", () => {
+    renderSheet(
+      produit({ remboursable: false, dci: "Menthol", posologieAdulte: "2 applications" }),
+      sheet({ local: localPara }),
+    );
+    expect(within(ouvrirOnglet("Identification")).getByText("Menthol")).toBeInTheDocument();
+    expect(within(ouvrirOnglet("Descriptif")).getByText("2 applications")).toBeInTheDocument();
+    // Un PPH renseigné sur un produit para reste visible plutôt qu'escamoté.
+    expect(within(ouvrirOnglet("Prix et fiscalité")).getByText("PPH")).toBeInTheDocument();
+  });
+
+  it("laisse la fiche médicament intacte", () => {
+    renderSheet(produit(), sheet());
+    const ident = ouvrirOnglet("Identification");
+    expect(within(ident).getByText("Forme galénique")).toBeInTheDocument();
+    const prix = ouvrirOnglet("Prix et fiscalité");
+    expect(within(prix).getByText("PPH")).toBeInTheDocument();
+    expect(within(prix).getByText("Remboursement")).toBeInTheDocument();
+  });
+
+  it("garde les onglets Stock et Organisation identiques", () => {
+    renderSheet(produit({ remboursable: false }), sheet({ local: localPara }));
+    expect(within(ouvrirOnglet("Stock")).getByText("Quantité en stock")).toBeInTheDocument();
+    expect(within(ouvrirOnglet("Organisation")).getByText("Fournisseur")).toBeInTheDocument();
   });
 });
 

@@ -15,9 +15,12 @@ import {
 import { cn } from "@/lib/utils";
 import {
   addCatalogueProduitToStock,
+  getCatalogueFiche,
   searchCatalogue,
+  type CatalogueFiche,
   type CatalogueSearchHit,
 } from "@/lib/server/stock-entry";
+import { FicheRecapitulatif } from "@/components/features/stock/catalogue-entry/fiche-recapitulatif";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -66,6 +69,10 @@ export function CatalogueEntryFlow({ suppliers }: { suppliers: SupplierOption[] 
   const [searchError, setSearchError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<CatalogueSearchHit | null>(null);
+  // La recherche ne renvoie qu'un extrait ; le récapitulatif a besoin de la
+  // fiche entière, celle qui sera effectivement recopiée.
+  const [fiche, setFiche] = useState<CatalogueFiche | null>(null);
+  const [ficheEnCours, setFicheEnCours] = useState(false);
   const [supplierId, setSupplierId] = useState<string>(NO_SUPPLIER);
   const [quantite, setQuantite] = useState("0");
   const [seuil, setSeuil] = useState("0");
@@ -111,6 +118,31 @@ export function CatalogueEntryFlow({ suppliers }: { suppliers: SupplierOption[] 
     };
   }, [debounced]);
 
+  useEffect(() => {
+    if (!selected) {
+      setFiche(null);
+      return;
+    }
+    let annule = false;
+    setFicheEnCours(true);
+    getCatalogueFiche(selected.id)
+      .then((complete) => {
+        if (!annule) setFiche(complete);
+      })
+      // Échec silencieux : le récapitulatif retombe sur l'extrait de la
+      // recherche. Empêcher l'ajout pour ça punirait le pharmacien d'une
+      // panne de lecture.
+      .catch(() => {
+        if (!annule) setFiche(null);
+      })
+      .finally(() => {
+        if (!annule) setFicheEnCours(false);
+      });
+    return () => {
+      annule = true;
+    };
+  }, [selected]);
+
   function submit() {
     if (!selected) return;
     setSubmitError(null);
@@ -152,25 +184,37 @@ export function CatalogueEntryFlow({ suppliers }: { suppliers: SupplierOption[] 
         <div className="mx-auto w-full max-w-2xl space-y-sp-lg">
           <Card>
             <CardContent className="flex items-start gap-sp-md">
-              <Thumbnail url={selected.photoUrl} />
+              <Thumbnail url={fiche?.photos[0]?.url ?? selected.photoUrl} />
               <div className="min-w-0 flex-1 space-y-sp-xs">
-                <p className="font-heading text-base font-bold text-foreground">{selected.nom}</p>
-                <p className="text-sm text-muted-foreground">
-                  {[selected.dosage, selected.formeGalenique, selected.laboratoire]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-                <div className="flex flex-wrap items-center gap-sp-sm pt-sp-xs text-sm">
-                  {selected.dci && <Badge variant="outline">{selected.dci}</Badge>}
-                  {selected.ppv !== null && (
-                    <span className="text-muted-foreground">
-                      PPV {selected.ppv.toFixed(2)} DH
-                    </span>
-                  )}
-                </div>
-                {/* Exactement ce qui a été demandé, et rien de plus : aucune
-                    promesse sur l'exactitude des données du catalogue, qui
-                    n'est qu'un point de départ. */}
+                {fiche ? (
+                  <FicheRecapitulatif fiche={fiche} />
+                ) : (
+                  // Repli sur l'extrait de la recherche, pendant le
+                  // chargement ou si la lecture a échoué.
+                  <>
+                    <p className="font-heading text-base font-bold text-foreground">
+                      {selected.nom}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {[selected.dosage, selected.formeGalenique, selected.laboratoire]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-sp-sm pt-sp-xs text-sm">
+                      {selected.dci && <Badge variant="outline">{selected.dci}</Badge>}
+                      {ficheEnCours && (
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                          Chargement de la fiche...
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+                {/* La phrase ne tient que si l'écran montre vraiment ce qu'il
+                    y a à vérifier — c'est ce que le récapitulatif au-dessus
+                    apporte. Aucune promesse pour autant sur l'exactitude du
+                    catalogue, qui n'est qu'un point de départ. */}
                 <p className="pt-sp-xs text-xs text-muted-foreground">
                   Vérifiez ces informations avant de les ajouter à votre stock.
                 </p>

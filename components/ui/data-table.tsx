@@ -207,6 +207,23 @@ export function DataTable<T>({
     Boolean(search.trim()) || Object.values(activeFilters).some((v) => v && v !== ALL_VALUE);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  /**
+   * La page affichée est bornée au nombre de pages réel : la liste peut
+   * rétrécir sans passer par les filtres du tableau — c'est ce que fait
+   * une pastille de la barre d'alertes du stock, qui remplace le tableau
+   * de lignes directement.
+   *
+   * Les deux boutons partent donc de cette page bornée, et non de `page`.
+   * Ils partaient de `page` : après un rétrécissement, reculer depuis une
+   * page 4 devenue 2 donnait 3, re-borné à 2 — l'écran ne bougeait pas, et
+   * il fallait trois clics pour reculer d'un cran.
+   *
+   * Seul « Précédent » en souffrait : « Suivant » est désactivé dès que
+   * `currentPage >= totalPages`, ce qui est précisément le cas où `page`
+   * et `currentPage` divergent. Il part quand même de la page bornée, par
+   * symétrie — la prochaine personne qui lit ce code ne devrait pas avoir
+   * à refaire ce raisonnement pour comprendre pourquoi les deux diffèrent.
+   */
   const currentPage = Math.min(page, totalPages);
   const pageRows = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
@@ -432,8 +449,9 @@ export function DataTable<T>({
               type="button"
               variant="outline"
               size="icon-sm"
+              aria-label="Page précédente"
               disabled={currentPage <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              onClick={() => setPage(Math.max(1, currentPage - 1))}
             >
               <ChevronLeft className="size-4" />
             </Button>
@@ -441,8 +459,9 @@ export function DataTable<T>({
               type="button"
               variant="outline"
               size="icon-sm"
+              aria-label="Page suivante"
               disabled={currentPage >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
             >
               <ChevronRight className="size-4" />
             </Button>

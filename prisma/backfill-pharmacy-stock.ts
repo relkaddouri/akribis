@@ -63,6 +63,12 @@ export const COPIED_COLUMNS = [
   "tva_vente",
   "remboursable",
   "taux_remboursement",
+  "prix_vente_indicatif",
+  "marque",
+  "categorie_principale",
+  "sous_categorie",
+  "sous_sous_categorie",
+  "etiquettes",
   // Descriptif
   "description",
   "excipients",
@@ -73,6 +79,39 @@ export const COPIED_COLUMNS = [
   "contre_indication_allaitement",
   "contre_indication_grossesse",
   "monographie",
+] as const;
+
+/**
+ * Colonnes que le rattrapage remplit là où la copie est restée vide.
+ *
+ * La passe principale ne touche que les lignes vierges (`nom IS NULL`),
+ * pour ne jamais écraser une correction de l'officine. Une case peut donc
+ * rester vide pour toujours, pour deux raisons différentes :
+ *
+ *   - la colonne a été **ajoutée après** que la ligne ait été recopiée —
+ *     la ligne porte un nom, donc elle est « déjà faite », alors que cette
+ *     colonne-là n'a jamais rien reçu (`prix_vente_indicatif`) ;
+ *   - la colonne existait, mais **le catalogue n'avait pas encore la
+ *     valeur** au moment de la copie (`categorie`, restée NULL jusqu'à ce
+ *     que `categorize:catalogue` classe les 5 916 fiches CNOPS).
+ *
+ * Dans les deux cas la règle est la même, et c'est elle qui rend
+ * l'opération sûre : on ne remplit **que là où la valeur est encore
+ * NULL**, et seulement si le catalogue en a une. Un NULL ici ne peut pas
+ * être un choix de la pharmacie — elle n'a aucun moyen de vider ces
+ * champs depuis l'interface.
+ *
+ * À compléter à chaque nouveau cas — le test tests/db/backfill-colonnes.ts
+ * vérifie que ces colonnes figurent aussi dans COPIED_COLUMNS.
+ */
+export const COLONNES_A_RATTRAPER = [
+  "prix_vente_indicatif",
+  "categorie",
+  "marque",
+  "categorie_principale",
+  "sous_categorie",
+  "sous_sous_categorie",
+  "etiquettes",
 ] as const;
 
 /** Une ligne est « déjà recopiée » dès qu'elle porte un nom. */
@@ -86,6 +125,21 @@ export function buildBackfillSql(): string {
     FROM "catalogue_produits" c
     WHERE c."id" = s."catalogue_produit_id"
       AND ${NOT_YET_COPIED}
+  `;
+}
+
+/**
+ * Rattrapage d'une colonne tardive : on ne remplit que les cases vides, et
+ * seulement quand le catalogue a bien quelque chose à y mettre.
+ */
+export function buildTopUpSql(column: string): string {
+  return `
+    UPDATE "pharmacy_stock" s
+    SET "${column}" = c."${column}"
+    FROM "catalogue_produits" c
+    WHERE c."id" = s."catalogue_produit_id"
+      AND s."${column}" IS NULL
+      AND c."${column}" IS NOT NULL
   `;
 }
 
@@ -142,6 +196,21 @@ async function main() {
       console.log(`  ⚠ sans fiche catalogue liée  ${orphelines} — laissées telles quelles`);
     }
 
+    // Ce que le rattrapage remplirait : compté aussi en dry-run, sinon
+    // celui-ci annoncerait « rien à faire » alors que l'exécution réelle
+    // écrirait — le contraire de ce à quoi sert un dry-run.
+    let aRattraper = 0;
+    for (const column of COLONNES_A_RATTRAPER) {
+      const n = await count(`
+        SELECT count(*) n FROM "pharmacy_stock" s
+        JOIN "catalogue_produits" c ON c."id" = s."catalogue_produit_id"
+        WHERE s."${column}" IS NULL AND c."${column}" IS NOT NULL
+      `);
+      if (n > 0) console.log(`  à rattraper ${column.padEnd(21)} ${n} ligne(s)`);
+      aRattraper += n;
+    }
+    if (aRattraper === 0) console.log("  à rattraper                  0");
+
     if (dryRun) {
       console.log("\n[dry-run] Rien n'a été écrit.");
       return;
@@ -153,8 +222,19 @@ async function main() {
     const result = await client.query(buildBackfillSql());
     await client.query("COMMIT");
 
+    // Rattrapage des colonnes tardives, sur les lignes déjà recopiées.
+    let rattrapees = 0;
+    for (const column of COLONNES_A_RATTRAPER) {
+      const top = await client.query(buildTopUpSql(column));
+      if (top.rowCount) {
+        console.log(`  rattrapage ${column.padEnd(22)} ${top.rowCount} ligne(s)`);
+        rattrapees += top.rowCount;
+      }
+    }
+
     const apres = await count(`SELECT count(*) n FROM "pharmacy_stock"`);
     console.log(`\n  lignes recopiées             ${result.rowCount}`);
+    console.log(`  cases rattrapées             ${rattrapees}`);
     console.log(`  lignes pharmacy_stock        ${avant} → ${apres}`);
 
     if (apres !== avant) {

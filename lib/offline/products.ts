@@ -24,6 +24,15 @@ export type { ProductRecord } from "@/lib/offline/db";
 export type ListProductsParams = {
   /** Matches against name, barcode and DCI (case-insensitive). */
   search?: string;
+  /**
+   * N'inclut que les produits que l'officine n'a pas désactivés.
+   *
+   * Par défaut la liste est complète : le stock, l'inventaire et la
+   * resynchronisation doivent voir les produits désactivés — ils existent
+   * toujours physiquement. Ce sont les écrans qui *proposent* un produit
+   * — comptoir, commande fournisseur — qui demandent le filtre.
+   */
+  actifsSeulement?: boolean;
 };
 
 function toProductRecord(local: ProductRecord): ProductRecord {
@@ -38,6 +47,9 @@ function toProductRecord(local: ProductRecord): ProductRecord {
     dci,
     photoUrl,
     category,
+    categorie,
+    sousCategorie,
+    actifLocalement,
     price,
     pph,
     tvaVente,
@@ -64,6 +76,14 @@ function toProductRecord(local: ProductRecord): ProductRecord {
     dci,
     photoUrl,
     category,
+    // Les lignes mises en cache avant l'ajout de ces deux champs ne les
+    // portent pas : `undefined` sortirait d'IndexedDB sans que le type le
+    // dise. On normalise ici, au seul point de lecture.
+    categorie: categorie ?? null,
+    sousCategorie: sousCategorie ?? null,
+    // Défaut sûr : une ligne mise en cache avant l'ajout du champ est
+    // active. L'inverse effacerait tout le stock du comptoir hors ligne.
+    actifLocalement: actifLocalement ?? true,
     price,
     pph,
     tvaVente,
@@ -85,7 +105,10 @@ export async function listProducts(params: ListProductsParams = {}): Promise<Pro
   const pharmacyId = getOfflinePharmacyId();
   const search = params.search?.trim().toLowerCase();
 
-  const all = await getDb().products.where("pharmacyId").equals(pharmacyId).toArray();
+  const stock = await getDb().products.where("pharmacyId").equals(pharmacyId).toArray();
+  const all = params.actifsSeulement
+    ? stock.filter((product) => product.actifLocalement !== false)
+    : stock;
   const filtered = search
     ? all.filter(
         (product) =>
@@ -128,6 +151,23 @@ function fieldsFromInput(data: ReturnType<typeof productFormSchema.parse>) {
   };
 }
 
+/**
+ * Reflète dans le cache local une désactivation **déjà confirmée par le
+ * serveur**, pour que la liste du stock et le comptoir en tiennent compte
+ * sans attendre la prochaine synchro descendante.
+ *
+ * Ne passe pas par la file de synchronisation et ne touche pas au
+ * `syncStatus` : il n'y a rien à pousser, le serveur a déjà écrit. Cette
+ * bascule demande donc le réseau — c'est un acte d'administration, pas un
+ * geste de comptoir, et la refuser hors ligne vaut mieux que de la mettre
+ * en file sans savoir ce que le serveur en fera.
+ */
+export async function markProductActifLocalement(id: string, actif: boolean): Promise<void> {
+  const existing = await getDb().products.get(id);
+  if (!existing) return;
+  await getDb().products.put({ ...existing, actifLocalement: actif });
+}
+
 export async function createProduct(input: ProductFormInput): Promise<ProductRecord> {
   const data = productFormSchema.parse(input);
   const pharmacyId = getOfflinePharmacyId();
@@ -138,6 +178,13 @@ export async function createProduct(input: ProductFormInput): Promise<ProductRec
     id,
     pharmacyId,
     ...fieldsFromInput(data),
+    // Un produit saisi à la main n'est rattaché à aucune fiche catalogue.
+    // Volontairement hors de `fieldsFromInput`, que `updateProduct`
+    // réutilise : les y mettre effacerait la famille d'un produit issu du
+    // catalogue à la première modification manuelle.
+    categorie: null,
+    sousCategorie: null,
+    actifLocalement: true,
     createdAt: now,
     updatedAt: now,
     syncStatus: "pending" as const,

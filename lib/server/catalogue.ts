@@ -36,49 +36,17 @@ import {
   type ImportDuplicate,
   type ImportRejection,
 } from "@/lib/catalogue/import-mapping";
-import type { CatalogueProduitModel } from "@/lib/db/generated/models";
+import {
+  toCatalogueRecord as toRecord,
+  type CatalogueProduitRecord,
+  type CataloguePhotoRecord,
+} from "@/lib/catalogue/record";
 
-type DecimalField =
-  | "pph"
-  | "ppv"
-  | "prixBaseRemboursement"
-  | "tvaAchat"
-  | "tvaVente"
-  | "tauxRemboursement";
+// Ré-exportés pour les huit fichiers qui les importent déjà d'ici. Les
+// exports de type disparaissent à la compilation : la règle « un fichier
+// "use server" n'exporte que des fonctions asynchrones » ne les concerne pas.
+export type { CatalogueProduitRecord, CataloguePhotoRecord };
 
-export type CataloguePhotoRecord = { id: string; url: string; ordre: number };
-
-/** Prisma `Decimal` is not JSON — flattened to numbers at this boundary. */
-export type CatalogueProduitRecord = Omit<CatalogueProduitModel, DecimalField> & {
-  pph: number | null;
-  ppv: number | null;
-  prixBaseRemboursement: number | null;
-  tvaAchat: number | null;
-  tvaVente: number | null;
-  tauxRemboursement: number | null;
-  /** Ordered, photo principale first. Empty when the fiche has none. */
-  photos: CataloguePhotoRecord[];
-};
-
-type ProduitWithPhotos = CatalogueProduitModel & {
-  photos?: { id: string; url: string; ordre: number }[];
-};
-
-function toRecord(produit: ProduitWithPhotos): CatalogueProduitRecord {
-  const decimal = (value: CatalogueProduitModel[DecimalField]) =>
-    value !== null && value !== undefined ? Number(value) : null;
-
-  return {
-    ...produit,
-    pph: decimal(produit.pph),
-    ppv: decimal(produit.ppv),
-    prixBaseRemboursement: decimal(produit.prixBaseRemboursement),
-    tvaAchat: decimal(produit.tvaAchat),
-    tvaVente: decimal(produit.tvaVente),
-    tauxRemboursement: decimal(produit.tauxRemboursement),
-    photos: produit.photos ?? [],
-  };
-}
 
 /**
  * Ordered by `ordre`, then by insertion date so ties resolve the same way

@@ -80,34 +80,34 @@ model User {
 }
 
 model Product {
-  id                String    @id @default(uuid())
-  pharmacyId        String    @map("pharmacy_id")
-  name              String
-  form              String
-  dosage            String?
-  laboratory        String?
-  barcode           String?
-  dci               String?
-  photoUrl          String?   @map("photo_url")
+  id                 String    @id @default(uuid())
+  pharmacyId         String    @map("pharmacy_id")
+  name               String
+  form               String
+  dosage             String?
+  laboratory         String?
+  barcode            String?
+  dci                String?
+  photoUrl           String?   @map("photo_url")
   /// One of the fixed values in PRODUCT_CATEGORIES (lib/validations/products.ts).
-  category          String?
+  category           String?
   /// Selling price used at the point of sale.
-  price             Decimal   @default(0) @db.Decimal(10, 2)
+  price              Decimal   @default(0) @db.Decimal(10, 2)
   /// Purchase/cost price — used to compute gross margin (price - purchasePrice) on sales reporting.
-  purchasePrice     Decimal?  @map("purchase_price") @db.Decimal(10, 2)
+  purchasePrice      Decimal?  @map("purchase_price") @db.Decimal(10, 2)
   /// Prix Public Hospitalier — regulated reference price, separate from `price`.
-  pph               Decimal?  @db.Decimal(10, 2)
-  tvaVente          Decimal?  @map("tva_vente") @db.Decimal(5, 2)
-  tvaAchat          Decimal?  @map("tva_achat") @db.Decimal(5, 2)
-  lowStockThreshold Int       @default(0) @map("low_stock_threshold")
-  quantityInStock   Int       @default(0) @map("quantity_in_stock")
-  nearestExpiryDate DateTime? @map("nearest_expiry_date")
-  remboursable      Boolean   @default(false)
+  pph                Decimal?  @db.Decimal(10, 2)
+  tvaVente           Decimal?  @map("tva_vente") @db.Decimal(5, 2)
+  tvaAchat           Decimal?  @map("tva_achat") @db.Decimal(5, 2)
+  lowStockThreshold  Int       @default(0) @map("low_stock_threshold")
+  quantityInStock    Int       @default(0) @map("quantity_in_stock")
+  nearestExpiryDate  DateTime? @map("nearest_expiry_date")
+  remboursable       Boolean   @default(false)
   /// Only meaningful when `remboursable` is true.
-  baseRemboursement Decimal?  @map("base_remboursement") @db.Decimal(10, 2)
-  posologieEnfant   String?   @map("posologie_enfant")
-  posologieAdulte   String?   @map("posologie_adulte")
-  monographie       String?
+  baseRemboursement  Decimal?  @map("base_remboursement") @db.Decimal(10, 2)
+  posologieEnfant    String?   @map("posologie_enfant")
+  posologieAdulte    String?   @map("posologie_adulte")
+  monographie        String?
   /// La fiche catalogue nationale dont ce produit est issu, quand il a été
   /// ajouté depuis le catalogue. Nul pour les produits saisis à la main
   /// avant — ou après — cette bascule : le champ relie, il n'impose pas.
@@ -116,9 +116,20 @@ model Product {
   /// ventes, réceptions, inventaire). Ce lien est ce qui permet à la fiche
   /// produit d'afficher les informations catalogue en lecture seule, et il
   /// prépare la bascule complète des lectures — voir docs/migration-catalogue.md.
-  catalogueProduitId String?  @map("catalogue_produit_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  catalogueProduitId String?   @map("catalogue_produit_id")
+  /// Désactivé par l'officine, pour elle seule : le produit disparaît du
+  /// comptoir et des commandes fournisseur, mais reste au stock avec ses
+  /// lots, ses mouvements et ses ventes passées. Toujours réversible.
+  ///
+  /// Distinct de `CatalogueProduit.actifCatalogue`, qui est national et
+  /// n'appartient qu'à l'Admin. Porté ici plutôt que sur `pharmacy_stock`
+  /// parce que c'est `products` que lisent toutes les lectures
+  /// opérationnelles — et parce qu'un produit saisi à la main n'a pas de
+  /// ligne `pharmacy_stock` : le drapeau y serait resté hors d'atteinte
+  /// pour la moitié du stock.
+  actifLocalement    Boolean   @default(true) @map("actif_localement")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   pharmacy        Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   /// `SetNull` plutôt que `Cascade` : retirer une fiche du catalogue ne doit
@@ -878,6 +889,17 @@ model CatalogueProduit {
   /// vente au Maroc. Distinct de `actifLocalement` côté officine.
   produitCommercialise  Boolean           @default(true) @map("produit_commercialise")
   groupeProduits        String?           @map("groupe_produits")
+  /// Marque commerciale. Distincte de `laboratoire` : en parapharmacie
+  /// c'est la marque qui identifie le produit au rayon, pas le fabricant.
+  marque                String?
+  /// Hiérarchie de RAYON, pour naviguer et filtrer le catalogue.
+  /// À ne pas confondre avec `gamme`/`sousGamme`, qui restent la ligne de
+  /// produit du laboratoire — deux découpages différents du même produit.
+  categoriePrincipale   String?           @map("categorie_principale")
+  sousCategorie         String?           @map("sous_categorie")
+  sousSousCategorie     String?           @map("sous_sous_categorie")
+  /// Mots-clés libres, pour la recherche.
+  etiquettes            String?
   /// Retrait du catalogue sans suppression — la traçabilité impose de garder
   /// la ligne, référencée par des ventes passées.
   actifCatalogue        Boolean           @default(true) @map("actif_catalogue")
@@ -894,6 +916,15 @@ model CatalogueProduit {
   /// « Base de remboursement (%) » — un taux (70 ou 0 dans le CNOPS 2014),
   /// à ne pas confondre avec `prixBaseRemboursement` ci-dessus.
   tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+  /// Prix de référence NON réglementé, pour la parapharmacie.
+  ///
+  /// À ne jamais confondre avec `ppv`, qui est le prix public réglementé
+  /// d'un médicament : ici le prix reste libre pour chaque officine une
+  /// fois la fiche recopiée dans son stock. Ce champ n'est qu'un point de
+  /// départ indicatif — c'est pourquoi il porte son propre nom plutôt que
+  /// de réutiliser `ppv`, qui aurait fait passer un prix libre pour un
+  /// prix encadré.
+  prixVenteIndicatif    Decimal? @map("prix_vente_indicatif") @db.Decimal(10, 2)
 
   // --- Informations descriptives (5.1) ---
   description                 String?
@@ -1015,6 +1046,19 @@ model PharmacyStock {
   tvaVente              Decimal? @map("tva_vente") @db.Decimal(5, 2)
   remboursable          Boolean?
   tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+  /// Les cinq champs de rayon et de marque, recopies du catalogue comme le
+  /// reste. Ajoutes apres coup : la migration parapharmacie ne les avait
+  /// posees que sur `catalogue_produits`, laissant la copie incomplete.
+  marque                String?
+  categoriePrincipale   String?  @map("categorie_principale")
+  sousCategorie         String?  @map("sous_categorie")
+  sousSousCategorie     String?  @map("sous_sous_categorie")
+  etiquettes            String?
+  /// Prix de reference non reglemente de la parapharmacie, recopie du
+  /// catalogue au meme titre que le reste. Ajoute apres les 34 premieres
+  /// colonnes : les lignes deja recopiees le recuperent par la passe de
+  /// rattrapage du backfill, voir prisma/backfill-pharmacy-stock.ts.
+  prixVenteIndicatif    Decimal? @map("prix_vente_indicatif") @db.Decimal(10, 2)
 
   // --- Descriptif ---
   description                 String?

@@ -24,6 +24,13 @@ import { requireUser } from "@/lib/auth/session";
 import { stockEntrySchema, type StockEntryInput } from "@/lib/validations/stock-entry";
 import { OPENING_LOT_NUMBER } from "@/lib/catalogue/lots";
 import type { CatalogueProduitModel } from "@/lib/db/generated/models";
+import { toCatalogueRecord, type CatalogueProduitRecord } from "@/lib/catalogue/record";
+import { prixInitial } from "@/lib/stock/prix";
+
+export type CatalogueFiche = CatalogueProduitRecord & {
+  /** Déjà au stock de cette officine — on propose de l'ouvrir, pas de l'ajouter deux fois. */
+  dejaEnStock: boolean;
+};
 
 export type CatalogueSearchHit = {
   id: string;
@@ -87,37 +94,43 @@ export async function searchCatalogue(query: string): Promise<CatalogueSearchHit
 }
 
 /** The catalogue fields the short form shows but does not let anyone edit. */
-export type CatalogueSummary = CatalogueSearchHit & { pph: number | null };
-
-export async function getCatalogueSummary(id: string): Promise<CatalogueSummary | null> {
+/**
+ * La fiche catalogue entière, telle qu'elle sera recopiée dans le stock.
+ *
+ * Remplace `getCatalogueSummary`, qui ne renvoyait que onze champs sur
+ * quarante-trois — et les onze d'un médicament : sur un produit de
+ * parapharmacie, dosage, laboratoire, DCI et PPV sont tous vides, et
+ * l'écran d'ajout n'affichait plus rien du tout, prix compris. Or c'est
+ * cet écran qui demande « Vérifiez ces informations » : il doit donc les
+ * montrer.
+ *
+ * Aucun garde-fou Admin ici : le catalogue est national et consultable par
+ * toute officine authentifiée, c'est même le point de départ de l'ajout au
+ * stock. Ce qui reste réservé à l'Admin, c'est de l'écrire.
+ */
+export async function getCatalogueFiche(id: string): Promise<CatalogueFiche | null> {
   const user = await requireUser();
 
   const fiche = await prisma.catalogueProduit.findUnique({
     where: { id },
     include: {
-      photos: { select: { url: true }, orderBy: [{ ordre: "asc" }, { dateAjout: "asc" }], take: 1 },
+      photos: {
+        select: { id: true, url: true, ordre: true },
+        orderBy: [{ ordre: "asc" }, { dateAjout: "asc" }],
+      },
       produits: { where: { pharmacyId: user.pharmacyId }, select: { id: true }, take: 1 },
     },
   });
   if (!fiche) return null;
 
   return {
-    id: fiche.id,
-    nom: fiche.nom,
-    formeGalenique: fiche.formeGalenique,
-    dosage: fiche.dosage,
-    laboratoire: fiche.laboratoire,
-    dci: fiche.dci,
-    codeBarres: fiche.codeBarres,
-    ppv: fiche.ppv !== null ? Number(fiche.ppv) : null,
-    pph: fiche.pph !== null ? Number(fiche.pph) : null,
-    photoUrl: fiche.photos[0]?.url ?? null,
+    ...toCatalogueRecord(fiche),
     dejaEnStock: fiche.produits.length > 0,
   };
 }
 
 /**
- * Les 34 colonnes que `pharmacy_stock` copie du catalogue.
+ * Les colonnes que `pharmacy_stock` copie du catalogue.
  *
  * Depuis le correctif de conception, `pharmacy_stock` porte sa propre copie
  * modifiable de la fiche plutôt que de la lire à travers
@@ -145,6 +158,11 @@ function catalogueSnapshot(fiche: CatalogueProduitModel) {
     necessitePrescription: fiche.necessitePrescription,
     produitCommercialise: fiche.produitCommercialise,
     groupeProduits: fiche.groupeProduits,
+    marque: fiche.marque,
+    categoriePrincipale: fiche.categoriePrincipale,
+    sousCategorie: fiche.sousCategorie,
+    sousSousCategorie: fiche.sousSousCategorie,
+    etiquettes: fiche.etiquettes,
     actifCatalogue: fiche.actifCatalogue,
     refrigerationRequise: fiche.refrigerationRequise,
     conditionnement: fiche.conditionnement,
@@ -157,6 +175,7 @@ function catalogueSnapshot(fiche: CatalogueProduitModel) {
     tvaVente: fiche.tvaVente,
     remboursable: fiche.remboursable,
     tauxRemboursement: fiche.tauxRemboursement,
+    prixVenteIndicatif: fiche.prixVenteIndicatif,
 
     description: fiche.description,
     excipients: fiche.excipients,
@@ -255,9 +274,11 @@ export async function addCatalogueProduitToStock(
           dci: fiche.dci,
           photoUrl: fiche.photos[0]?.url ?? null,
           category: fiche.classeTherapeutique,
-          // PPV is the regulated public price; with none on file the
-          // pharmacist sets it later rather than selling at zero by default.
-          price: fiche.ppv ?? 0,
+          // Le PPV est le prix public réglementé, et seules les fiches de
+          // médicament en portent un : s'y arrêter faisait entrer toute la
+          // parapharmacie au stock à 0,00 DH, vendable pour rien au
+          // comptoir. Le prix indicatif prend le relais — lib/stock/prix.ts.
+          price: prixInitial(fiche),
           pph: fiche.pph,
           tvaVente: fiche.tvaVente,
           tvaAchat: fiche.tvaAchat,
@@ -393,6 +414,16 @@ export type StockSheet = {
     prixAchat: number | null;
     /** Drives the suggested TVA — para is taxed differently from medicine. */
     categorie: string | null;
+    // Propres a la parapharmacie : ils ne vivent que sur `pharmacy_stock`,
+    // `products` n'en a pas l'equivalent.
+    marque: string | null;
+    categoriePrincipale: string | null;
+    sousCategorie: string | null;
+    sousSousCategorie: string | null;
+    etiquettes: string | null;
+    prixVenteIndicatif: number | null;
+    /** Texte principal d'un produit para, la ou un medicament a une monographie. */
+    description: string | null;
     indications: string | null;
     contreIndicationConduite: string | null;
     contreIndicationAllaitement: string | null;
@@ -495,6 +526,13 @@ export async function getStockSheet(productId: string): Promise<StockSheet> {
           stockMinimum: stock.stockMinimum,
           prixAchat: num(stock.prixAchat),
           categorie: stock.categorie,
+          marque: stock.marque,
+          categoriePrincipale: stock.categoriePrincipale,
+          sousCategorie: stock.sousCategorie,
+          sousSousCategorie: stock.sousSousCategorie,
+          etiquettes: stock.etiquettes,
+          prixVenteIndicatif: num(stock.prixVenteIndicatif),
+          description: stock.description,
           indications: stock.indications,
           contreIndicationConduite: stock.contreIndicationConduite,
           contreIndicationAllaitement: stock.contreIndicationAllaitement,
@@ -622,6 +660,87 @@ export async function refreshFromCatalogue(productId: string): Promise<RefreshRe
  * La valeur est celle que l'interface a proposée, mais elle est
  * revalidée ici : le champ ciblé comme le taux viennent du client.
  */
+/**
+ * Désactive — ou réactive — un produit pour cette officine seulement.
+ *
+ * Rien n'est supprimé : les lots, les mouvements et les ventes passées
+ * restent en place, et la ligne reste visible dans le stock. Ce que le
+ * drapeau change, c'est que le produit cesse d'être proposé au comptoir et
+ * à la commande fournisseur. C'est la réponse au besoin « retirer un
+ * produit que je ne vends plus » sans jamais toucher à l'historique
+ * comptable, qui doit rester exact.
+ *
+ * Le drapeau national `actifCatalogue` n'est pas touché : une officine ne
+ * décide pas pour les autres.
+ */
+export async function setProductActifLocalement(
+  productId: string,
+  actif: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await requireUser();
+
+  const product = await prisma.product.findFirst({
+    where: { id: productId, pharmacyId: user.pharmacyId },
+    select: { id: true, catalogueProduitId: true },
+  });
+  if (!product) return { ok: false, error: "Produit introuvable." };
+
+  await prisma.product.update({
+    where: { id: product.id },
+    data: { actifLocalement: actif },
+  });
+
+  // La copie `pharmacy_stock` porte la même colonne. Elle n'est lue par
+  // aucun écran aujourd'hui, mais la laisser diverger reviendrait à semer
+  // la contradiction qu'il faudra trancher plus tard.
+  if (product.catalogueProduitId) {
+    await prisma.pharmacyStock.updateMany({
+      where: { pharmacyId: user.pharmacyId, catalogueProduitId: product.catalogueProduitId },
+      data: { actifLocalement: actif },
+    });
+  }
+
+  revalidatePath("/dashboard/stock");
+  revalidatePath(`/dashboard/stock/produits/${product.id}`);
+  return { ok: true };
+}
+
+/**
+ * Fixe le prix de vente d'un produit du stock.
+ *
+ * Sert au rattrapage d'un prix resté à zéro — le cas de toute la
+ * parapharmacie entrée au stock avant le correctif de `prixInitial`. Le
+ * geste est le même que pour la TVA manquante : l'interface propose, le
+ * pharmacien applique.
+ *
+ * Rien n'est recopié vers `pharmacy_stock` : sa colonne `ppv` porte le
+ * prix public **réglementé** tel que le catalogue le donne, pas le prix
+ * auquel cette officine choisit de vendre. Les confondre reviendrait à
+ * écrire un prix national depuis un écran d'officine.
+ */
+export async function setProductPrix(
+  productId: string,
+  prix: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await requireUser();
+
+  if (!Number.isFinite(prix) || prix <= 0) {
+    return { ok: false, error: "Le prix de vente doit être supérieur à zéro." };
+  }
+
+  const product = await prisma.product.findFirst({
+    where: { id: productId, pharmacyId: user.pharmacyId },
+    select: { id: true },
+  });
+  if (!product) return { ok: false, error: "Produit introuvable." };
+
+  await prisma.product.update({ where: { id: product.id }, data: { price: prix } });
+
+  revalidatePath("/dashboard/stock");
+  revalidatePath(`/dashboard/stock/produits/${product.id}`);
+  return { ok: true };
+}
+
 export async function setProductTva(
   productId: string,
   field: "tvaVente" | "tvaAchat",
