@@ -14,6 +14,12 @@ function Tabs({
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
+      // Transmis à Radix, et pas seulement recopié en attribut de style.
+      // `orientation` etait destructure puis jamais rendu : la mise en page
+      // basculait en colonne, mais les fleches du clavier continuaient de
+      // naviguer sur l'axe horizontal et `aria-orientation` annoncait une
+      // barre horizontale a qui ne voit pas l'ecran.
+      orientation={orientation}
       data-orientation={orientation}
       className={cn(
         "group/tabs flex gap-2 data-horizontal:flex-col",

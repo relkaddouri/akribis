@@ -28,6 +28,7 @@ export type PharmacySettings = {
   phone: string | null;
   ice: string | null;
   orderNumber: string | null;
+  inpe: string | null;
   logoUrl: string | null;
   receiptSettings: ReceiptSettings;
   /** Dirhams per loyalty point; 0 means the programme is off. */
@@ -95,6 +96,7 @@ export async function getPharmacySettings(): Promise<PharmacySettings> {
     phone: pharmacy.phone,
     ice: pharmacy.ice,
     orderNumber: pharmacy.orderNumber,
+    inpe: pharmacy.inpe,
     logoUrl: pharmacy.logoUrl,
     receiptSettings: parseReceiptSettings(pharmacy.receiptSettings),
     loyaltyRate: Number(pharmacy.loyaltyRate),
@@ -142,6 +144,7 @@ export async function updatePharmacyInfoAction(
     phone: formData.get("phone"),
     ice: formData.get("ice"),
     orderNumber: formData.get("orderNumber"),
+    inpe: formData.get("inpe"),
     loyaltyRate: formData.get("loyaltyRate"),
   });
   if (!parsed.success) {

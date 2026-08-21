@@ -30,12 +30,15 @@ export function PharmacyInfoForm({ pharmacy }: { pharmacy: PharmacySettings }) {
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2 sm:col-span-2">
+      {/* Trois colonnes sur très large écran : la carte occupe désormais
+          toute la largeur, et à deux colonnes un champ « Téléphone »
+          s'étirerait sur sept cents pixels pour dix chiffres. */}
+      <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+        <div className="space-y-2 sm:col-span-2 2xl:col-span-3">
           <Label htmlFor="name">Nom de la pharmacie</Label>
           <Input id="name" name="name" defaultValue={pharmacy.name} required />
         </div>
-        <div className="space-y-2 sm:col-span-2">
+        <div className="space-y-2 sm:col-span-2 2xl:col-span-3">
           <Label htmlFor="address">Adresse</Label>
           <Input id="address" name="address" defaultValue={pharmacy.address ?? ""} />
         </div>
@@ -50,6 +53,14 @@ export function PharmacyInfoForm({ pharmacy }: { pharmacy: PharmacySettings }) {
         <div className="space-y-2">
           <Label htmlFor="orderNumber">Numéro d&apos;ordre</Label>
           <Input id="orderNumber" name="orderNumber" defaultValue={pharmacy.orderNumber ?? ""} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="inpe">Identifiant INPE</Label>
+          <Input id="inpe" name="inpe" defaultValue={pharmacy.inpe ?? ""} />
+          <p className="text-xs text-muted-foreground">
+            Identifiant National du Praticien et de l&apos;Établissement — il figure sur les
+            bordereaux adressés aux organismes de tiers payant.
+          </p>
         </div>
         <div className="space-y-2">
           <Label htmlFor="loyaltyRate">Taux de fidélité</Label>

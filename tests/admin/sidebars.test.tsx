@@ -48,9 +48,26 @@ describe("sidebar pharmacie — inchangée après extraction du socle", () => {
   it("garde ses sections, sa recherche et son fil d'actualité", () => {
     render(<DashboardSidebar role="owner" />);
     expect(screen.getByText("Menu")).toBeInTheDocument();
-    expect(screen.getByText("Outils")).toBeInTheDocument();
     expect(screen.getByText("Akribis actualités")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Rechercher/i)).toBeInTheDocument();
+  });
+
+  /**
+   * La section « Outils » — Akribis Intelligence, Labo, Medical — a été
+   * retirée sur demande. C'étaient trois entrées désactivées, sans route,
+   * annonçant des produits à venir ; elles occupaient le bas de la barre
+   * sans que rien ne s'y clique.
+   *
+   * Le module AKRIBIS_TOOLS, lui, reste : le fil d'actualités s'en sert
+   * pour les pastilles des annonces Suite, et le supprimer les aurait
+   * cassées. Ce test dit lequel des deux a disparu.
+   */
+  it("n'affiche plus la section Outils", () => {
+    render(<DashboardSidebar role="owner" />);
+    expect(screen.queryByText("Outils")).not.toBeInTheDocument();
+    for (const outil of ["Akribis Intelligence", "Akribis Labo", "Akribis Medical"]) {
+      expect(screen.queryByText(outil)).not.toBeInTheDocument();
+    }
   });
 
   it("affiche les badges de compteur", () => {
