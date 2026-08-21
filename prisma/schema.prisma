@@ -18,6 +18,10 @@ model Pharmacy {
   /// ICE (Identifiant Commun de l'Entreprise) — Moroccan business registry number.
   ice             String?
   orderNumber     String?  @map("order_number")
+  /// INPE — Identifiant National du Praticien et de l'Établissement.
+  /// Identifie l'officine auprès des organismes de tiers payant ; il figure
+  /// sur les bordereaux qu'on leur adresse.
+  inpe            String?
   logoUrl         String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
   receiptSettings Json?    @map("receipt_settings")
@@ -46,6 +50,7 @@ model Pharmacy {
   inventorySessions InventorySession[]
 
   pharmacyStock PharmacyStock[]
+  organismes    OrganismeTiersPayant[]
 
   @@map("pharmacies")
 }
@@ -1157,4 +1162,43 @@ model EventLog {
   @@index([entite, entiteId])
   @@index([acteurId, createdAt])
   @@map("event_log")
+}
+
+/// Un organisme de tiers payant : CNSS/AMO, CNOPS, une mutuelle ou une
+/// assurance privée.
+///
+/// Propre à chaque officine — deux pharmacies peuvent conventionner avec
+/// des organismes différents, et négocier des taux différents avec le même.
+/// D'où `pharmacy_id` sur chaque ligne, et l'unicité du code qui vaut par
+/// officine et non globalement.
+model OrganismeTiersPayant {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+
+  nom  String
+  /// Le code par lequel l'organisme s'identifie sur les bordereaux.
+  code String
+
+  /// Part prise en charge par défaut, en pourcentage. Un point de départ :
+  /// le taux réel se décide vente par vente, un même organisme ne couvrant
+  /// pas un générique comme un princeps.
+  tauxCouverture Decimal @default(0) @map("taux_couverture") @db.Decimal(5, 2)
+
+  /// Format de bordereau attendu, en texte libre pour l'instant. À
+  /// structurer le jour où l'on générera les bordereaux pour de bon —
+  /// aujourd'hui c'est une note que l'officine se laisse à elle-même.
+  formatBordereau String? @map("format_bordereau")
+
+  /// Désactivé, jamais supprimé : des ventes passées le référencent, et
+  /// les faire disparaître fausserait la traçabilité qu'elles servent.
+  actif Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+
+  @@unique([pharmacyId, code])
+  @@index([pharmacyId, actif])
+  @@map("organismes_tiers_payant")
 }

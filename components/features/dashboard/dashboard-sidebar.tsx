@@ -4,7 +4,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ArrowUpRight,
   BarChart3,
   Boxes,
   ClipboardList,
@@ -26,11 +25,6 @@ import type { Role } from "@/lib/auth/roles";
 import { ThemeToggle } from "@/components/features/dashboard/theme-toggle";
 import { GlobalSearch } from "@/components/features/dashboard/global-search";
 import { useDashboardCounts } from "@/components/features/dashboard/use-dashboard-counts";
-import {
-  AKRIBIS_TOOLS,
-  SIDEBAR_TOOL_ORDER,
-  type AkribisTool,
-} from "@/components/features/dashboard/akribis-tools";
 import { NEWS_PATH, REMINDERS_PATH } from "@/lib/auth/access-control";
 import {
   AppSidebar,
@@ -56,13 +50,6 @@ const MENU_ITEMS: NavItem[] = [
 const INVENTORY_ITEM: NavItem = { label: "Inventaire", href: "/inventaire", icon: Boxes };
 
 const REPORTS_ITEM: NavItem = { label: "Rapports", href: "/dashboard/stats", icon: BarChart3 };
-
-/**
- * Upcoming companion products — placeholders with no route yet. Icons and
- * colours come from the shared AKRIBIS_TOOLS map so a tool looks the same
- * here and on the actualités feed's Suite badges.
- */
-const TOOL_ITEMS = SIDEBAR_TOOL_ORDER.map((key) => AKRIBIS_TOOLS[key]);
 
 function isActivePath(pathname: string, href: string) {
   if (href === "/dashboard") return pathname === "/dashboard";
@@ -121,38 +108,6 @@ function CountedSidebarLink({
   );
 }
 
-function ToolLink({ tool, collapsed }: { tool: AkribisTool; collapsed: boolean }) {
-  const Icon = tool.icon;
-  return (
-    <MaybeTooltip collapsed={collapsed} label={tool.label}>
-      <button
-        type="button"
-        disabled
-        aria-label={collapsed ? tool.label : undefined}
-        className={cn(
-          itemBaseClass,
-          "w-full cursor-default text-muted-foreground hover:bg-muted/60",
-          collapsed ? "justify-center px-0" : "px-sp-sm",
-        )}
-      >
-        <Icon className={cn("size-4 shrink-0", tool.iconClass)} strokeWidth={1.75} />
-        {!collapsed && (
-          <>
-            <span className="flex-1 text-left">{tool.label}</span>
-            <span
-              className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded-full",
-                tool.circleClass,
-              )}
-            >
-              <ArrowUpRight className="size-3" strokeWidth={2} />
-            </span>
-          </>
-        )}
-      </button>
-    </MaybeTooltip>
-  );
-}
 
 export function DashboardSidebar({
   role,
@@ -270,17 +225,6 @@ export function DashboardSidebar({
                   collapsed={collapsed}
                 />
               )}
-            </div>
-          </div>
-
-          <SidebarDivider />
-
-          <div>
-            {!collapsed && <SectionLabel>Outils</SectionLabel>}
-            <div className="space-y-sp-xs">
-              {TOOL_ITEMS.map((tool) => (
-                <ToolLink key={tool.label} tool={tool} collapsed={collapsed} />
-              ))}
             </div>
           </div>
         </>
