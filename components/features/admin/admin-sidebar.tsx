@@ -2,10 +2,18 @@
 
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { BookMarked, Building2, CreditCard, Lightbulb, LogOut, Settings } from "lucide-react";
+import {
+  BookMarked,
+  Building2,
+  CreditCard,
+  Lightbulb,
+  LogOut,
+  ScrollText,
+  Settings,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOutAction } from "@/lib/auth/actions";
-import { ADMIN_CATALOGUE_PATH } from "@/lib/auth/access-control";
+import { ADMIN_CATALOGUE_PATH, ADMIN_JOURNAL_PATH } from "@/lib/auth/access-control";
 import { ThemeToggle } from "@/components/features/dashboard/theme-toggle";
 import {
   AppSidebar,
@@ -20,6 +28,7 @@ import {
 
 const MENU_ITEMS: NavItem[] = [
   { label: "Catalogue produits", href: ADMIN_CATALOGUE_PATH, icon: BookMarked },
+  { label: "Journal d'audit", href: ADMIN_JOURNAL_PATH, icon: ScrollText },
 ];
 
 /** Where the rest of the back-office will go. No routes yet, by design. */

@@ -33,12 +33,20 @@
     "**/*.ts",
     "**/*.tsx",
     ".next-nopublic/types/**/*.ts",
+    ".next-verif/types/**/*.ts",
     ".next-verify/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-verif/types/**/*.ts"
+    ".next-build/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Les vérifications lancent `next build` dans un distDir séparé pour ne
+    // pas se battre avec le serveur de dev sur `.next`. Sans cette ligne,
+    // ses types générés entrent dans le typecheck — et iCloud, qui
+    // synchronise ce dossier, y dépose des copies de conflit (« fichier
+    // 6.ts ») qui redéclarent tout en double.
+    ".next",
+    ".next-*"
   ]
 }

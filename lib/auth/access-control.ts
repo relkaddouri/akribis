@@ -13,6 +13,7 @@ export const INVENTORY_PATH = "/inventaire";
 /** Akribis back-office. Nothing under it belongs to a pharmacy. */
 export const ADMIN_PATH = "/admin";
 export const ADMIN_CATALOGUE_PATH = "/admin/catalogue";
+export const ADMIN_JOURNAL_PATH = "/admin/journal";
 /** Where an Akribis admin lands — they have no pharmacy dashboard to go to. */
 export const DEFAULT_ADMIN_PATH = ADMIN_CATALOGUE_PATH;
 /** Shown when the middleware finds the app misconfigured. Never protected. */
