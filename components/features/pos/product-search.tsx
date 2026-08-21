@@ -88,8 +88,11 @@ export const ProductSearch = forwardRef<
   }, [value]);
 
   const query = useQuery({
-    queryKey: ["products", { search: debounced }],
-    queryFn: () => listProducts({ search: debounced }),
+    // `actifsSeulement` fait partie de la clé : la liste du stock
+    // interroge le même cache React Query sous ["products", { search }].
+    // Sans lui, l'un des deux écrans recevrait la liste de l'autre.
+    queryKey: ["products", { search: debounced, actifsSeulement: true }],
+    queryFn: () => listProducts({ search: debounced, actifsSeulement: true }),
     enabled: debounced.length > 0,
   });
 
@@ -129,7 +132,10 @@ export const ProductSearch = forwardRef<
     // almost instantly, so this looks up an exact barcode match right
     // away instead of waiting on the debounced list — one scan, one
     // line added, no mouse needed.
-    const matches = await listProducts({ search: code });
+    // Un produit désactivé ne se vend pas, même scanné : il ne remonte
+    // pas ici, et la recherche reste sans résultat comme pour un code
+    // inconnu.
+    const matches = await listProducts({ search: code, actifsSeulement: true });
     const exact = matches.find((product) => product.barcode === code);
     if (exact) {
       select(exact);

@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailBlock, DetailGroup, DetailRow, YesNo } from "@/components/ui/detail-list";
 import { CategorieBadge } from "@/components/features/catalogue/categorie-badge";
+import { estRenseigne, profilDe } from "@/lib/catalogue/profil-fiche";
 import { CatalogueFlagSwitch } from "@/components/features/admin/catalogue-flag-switch";
 import { CataloguePhotoCarousel } from "@/components/features/admin/catalogue-photo-carousel";
 import { TABLEAUX_SUBSTANCE } from "@/lib/validations/catalogue";
@@ -64,7 +65,16 @@ function TabBody({ children }: { children: React.ReactNode }) {
 }
 
 export function CatalogueDetailView({ produit }: { produit: CatalogueProduitRecord }) {
-  const sousTitre = [produit.dosage, produit.formeGalenique].filter(Boolean).join(" · ");
+  const profil = profilDe(produit.categorie);
+  const estPara = profil === "parapharmacie";
+
+  // Le sous-titre dit ce qui identifie le produit dans SA famille : dosage
+  // et forme pour un médicament, marque et rayon pour de la parapharmacie.
+  const sousTitre = estPara
+    ? [produit.marque, produit.categoriePrincipale, produit.sousCategorie]
+        .filter(Boolean)
+        .join(" · ")
+    : [produit.dosage, produit.formeGalenique].filter(Boolean).join(" · ");
 
   return (
     <div className="space-y-sp-lg">
@@ -130,10 +140,21 @@ export function CatalogueDetailView({ produit }: { produit: CatalogueProduitReco
                 without opening a tab. Deliberately styled differently from
                 the tab rows — a summary, not a fifth list to scan. */}
             <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-border sm:grid-cols-4">
-              <Summary label="Code-barres" value={produit.codeBarres} mono />
-              <Summary label="DCI" value={produit.dci} />
-              <Summary label="Laboratoire" value={produit.laboratoire} />
-              <Summary label="PPV" value={dirham(produit.ppv)} />
+              {estPara ? (
+                <>
+                  <Summary label="Marque" value={produit.marque} />
+                  <Summary label="Rayon" value={produit.categoriePrincipale} />
+                  <Summary label="Sous-catégorie" value={produit.sousCategorie} />
+                  <Summary label="Prix indicatif" value={dirham(produit.prixVenteIndicatif)} />
+                </>
+              ) : (
+                <>
+                  <Summary label="Code-barres" value={produit.codeBarres} mono />
+                  <Summary label="DCI" value={produit.dci} />
+                  <Summary label="Laboratoire" value={produit.laboratoire} />
+                  <Summary label="PPV" value={dirham(produit.ppv)} />
+                </>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -148,27 +169,75 @@ export function CatalogueDetailView({ produit }: { produit: CatalogueProduitReco
 
         <TabsContent value="identification">
           <TabBody>
-            <DetailGroup title="Identité">
-              <DetailRow label="Code-barres" value={produit.codeBarres} />
-              <DetailRow label="DCI" value={produit.dci} />
-              <DetailRow label="Laboratoire" value={produit.laboratoire} />
-              <DetailRow label="Forme galénique" value={produit.formeGalenique} />
-            </DetailGroup>
+            {estPara ? (
+              <>
+                <DetailGroup title="Identité">
+                  <DetailRow label="Marque" value={produit.marque} />
+                  <DetailRow label="Code-barres" value={produit.codeBarres} />
+                  <DetailRow label="Conditionnement" value={produit.conditionnement} />
+                </DetailGroup>
 
-            <DetailGroup title="Classification">
-              <DetailRow
-                label="Classe thérapeutique"
-                value={produit.classeTherapeutique}
-                prose
-              />
-              <DetailRow
-                label="Tableau"
-                value={TABLEAU_LABELS.get(produit.produitTableau) ?? produit.produitTableau}
-              />
-              <DetailRow label="Gamme" value={produit.gamme} />
-              <DetailRow label="Sous-gamme" value={produit.sousGamme} />
-              <DetailRow label="Groupe de produits" value={produit.groupeProduits} />
-            </DetailGroup>
+                <DetailGroup title="Rayon">
+                  <DetailRow label="Catégorie principale" value={produit.categoriePrincipale} />
+                  <DetailRow label="Sous-catégorie" value={produit.sousCategorie} />
+                  <DetailRow label="Sous-sous-catégorie" value={produit.sousSousCategorie} />
+                  <DetailRow label="Étiquettes" value={produit.etiquettes} prose />
+                </DetailGroup>
+
+                {/* Vocabulaire du médicament : montré uniquement s'il porte
+                    vraiment une valeur. Escamoter une donnée renseignée
+                    serait pire qu'afficher une ligne vide. */}
+                {[
+                  produit.dci,
+                  produit.laboratoire,
+                  produit.classeTherapeutique,
+                  produit.gamme,
+                  produit.sousGamme,
+                  produit.groupeProduits,
+                ].some(estRenseigne) && (
+                  <DetailGroup title="Autres informations renseignées">
+                    {estRenseigne(produit.dci) && <DetailRow label="DCI" value={produit.dci} />}
+                    {estRenseigne(produit.laboratoire) && (
+                      <DetailRow label="Laboratoire" value={produit.laboratoire} />
+                    )}
+                    {estRenseigne(produit.classeTherapeutique) && (
+                      <DetailRow label="Classe thérapeutique" value={produit.classeTherapeutique} prose />
+                    )}
+                    {estRenseigne(produit.gamme) && <DetailRow label="Gamme" value={produit.gamme} />}
+                    {estRenseigne(produit.sousGamme) && (
+                      <DetailRow label="Sous-gamme" value={produit.sousGamme} />
+                    )}
+                    {estRenseigne(produit.groupeProduits) && (
+                      <DetailRow label="Groupe de produits" value={produit.groupeProduits} />
+                    )}
+                  </DetailGroup>
+                )}
+              </>
+            ) : (
+              <>
+                <DetailGroup title="Identité">
+                  <DetailRow label="Code-barres" value={produit.codeBarres} />
+                  <DetailRow label="DCI" value={produit.dci} />
+                  <DetailRow label="Laboratoire" value={produit.laboratoire} />
+                  <DetailRow label="Forme galénique" value={produit.formeGalenique} />
+                </DetailGroup>
+
+                <DetailGroup title="Classification">
+                  <DetailRow
+                    label="Classe thérapeutique"
+                    value={produit.classeTherapeutique}
+                    prose
+                  />
+                  <DetailRow
+                    label="Tableau"
+                    value={TABLEAU_LABELS.get(produit.produitTableau) ?? produit.produitTableau}
+                  />
+                  <DetailRow label="Gamme" value={produit.gamme} />
+                  <DetailRow label="Sous-gamme" value={produit.sousGamme} />
+                  <DetailRow label="Groupe de produits" value={produit.groupeProduits} />
+                </DetailGroup>
+              </>
+            )}
 
             {/* Modifiables ici, contrairement au reste de la fiche : ce sont
                 trois bascules que l'Admin ajuste souvent, et passer par le
@@ -217,24 +286,68 @@ export function CatalogueDetailView({ produit }: { produit: CatalogueProduitReco
 
         <TabsContent value="prix">
           <TabBody>
-            <DetailGroup title="Prix réglementés">
-              <DetailRow label="PPH" value={dirham(produit.pph)} />
-              <DetailRow label="PPV" value={dirham(produit.ppv)} />
-            </DetailGroup>
+            {estPara ? (
+              <>
+                <DetailGroup title="Prix indicatif">
+                  <DetailRow
+                    label="Prix de vente indicatif"
+                    value={dirham(produit.prixVenteIndicatif)}
+                  />
+                </DetailGroup>
 
-            <DetailGroup title="Fiscalité">
-              <DetailRow label="TVA achat" value={percent(produit.tvaAchat)} />
-              <DetailRow label="TVA vente" value={percent(produit.tvaVente)} />
-            </DetailGroup>
+                <DetailGroup title="Fiscalité">
+                  <DetailRow label="TVA achat" value={percent(produit.tvaAchat)} />
+                  <DetailRow label="TVA vente" value={percent(produit.tvaVente)} />
+                </DetailGroup>
 
-            <DetailGroup title="Remboursement">
-              <DetailRow label="Remboursable" value={<YesNo value={produit.remboursable} />} />
-              <DetailRow label="Taux de remboursement" value={percent(produit.tauxRemboursement)} />
-              <DetailRow
-                label="Prix base de remboursement"
-                value={dirham(produit.prixBaseRemboursement)}
-              />
-            </DetailGroup>
+                <p className="max-w-prose text-sm text-muted-foreground">
+                  La parapharmacie n&apos;a pas de prix réglementé : ce montant n&apos;est qu&apos;un
+                  point de départ, et chaque officine fixe librement son prix une fois la fiche
+                  copiée dans son stock.
+                </p>
+
+                {/* Le remboursement est hors profil, mais s'il a été coché il
+                    faut le voir : la fiche ne doit rien cacher. */}
+                {(produit.remboursable ||
+                  estRenseigne(produit.ppv) ||
+                  estRenseigne(produit.pph)) && (
+                  <DetailGroup title="Autres informations renseignées">
+                    {estRenseigne(produit.pph) && <DetailRow label="PPH" value={dirham(produit.pph)} />}
+                    {estRenseigne(produit.ppv) && <DetailRow label="PPV" value={dirham(produit.ppv)} />}
+                    {produit.remboursable && (
+                      <>
+                        <DetailRow label="Remboursable" value={<YesNo value={produit.remboursable} />} />
+                        <DetailRow
+                          label="Taux de remboursement"
+                          value={percent(produit.tauxRemboursement)}
+                        />
+                      </>
+                    )}
+                  </DetailGroup>
+                )}
+              </>
+            ) : (
+              <>
+                <DetailGroup title="Prix réglementés">
+                  <DetailRow label="PPH" value={dirham(produit.pph)} />
+                  <DetailRow label="PPV" value={dirham(produit.ppv)} />
+                </DetailGroup>
+
+                <DetailGroup title="Fiscalité">
+                  <DetailRow label="TVA achat" value={percent(produit.tvaAchat)} />
+                  <DetailRow label="TVA vente" value={percent(produit.tvaVente)} />
+                </DetailGroup>
+
+                <DetailGroup title="Remboursement">
+                  <DetailRow label="Remboursable" value={<YesNo value={produit.remboursable} />} />
+                  <DetailRow label="Taux de remboursement" value={percent(produit.tauxRemboursement)} />
+                  <DetailRow
+                    label="Prix base de remboursement"
+                    value={dirham(produit.prixBaseRemboursement)}
+                  />
+                </DetailGroup>
+              </>
+            )}
           </TabBody>
         </TabsContent>
 
@@ -242,31 +355,48 @@ export function CatalogueDetailView({ produit }: { produit: CatalogueProduitReco
           <TabBody>
             <DetailGroup title="Présentation">
               <DetailRow label="Description" value={produit.description} prose />
-              <DetailRow label="Indications" value={produit.indications} prose />
-              <DetailRow label="Excipients" value={produit.excipients} prose />
-              <DetailRow label="Conditionnement" value={produit.conditionnement} />
-              <DetailRow label="Référence laboratoire" value={produit.referenceLabo} />
+              {!estPara && <DetailRow label="Indications" value={produit.indications} prose />}
+              {!estPara && <DetailRow label="Excipients" value={produit.excipients} prose />}
+              {!estPara && <DetailRow label="Conditionnement" value={produit.conditionnement} />}
+              {!estPara && (
+                <DetailRow label="Référence laboratoire" value={produit.referenceLabo} />
+              )}
+              {estPara && <DetailRow label="Étiquettes" value={produit.etiquettes} prose />}
             </DetailGroup>
 
-            <DetailGroup title="Posologie">
-              <DetailRow label="Adulte" value={produit.posologieAdulte} prose />
-              <DetailRow label="Enfant" value={produit.posologieEnfant} prose />
-            </DetailGroup>
+            {/* Posologie et contre-indications n'ont pas de sens sur un
+                shampooing. Elles restent affichées si quelqu'un les a
+                pourtant renseignées — une donnée saisie ne disparaît pas
+                parce que le profil ne l'attendait pas. */}
+            {(!estPara ||
+              [produit.posologieAdulte, produit.posologieEnfant].some(estRenseigne)) && (
+              <DetailGroup title="Posologie">
+                <DetailRow label="Adulte" value={produit.posologieAdulte} prose />
+                <DetailRow label="Enfant" value={produit.posologieEnfant} prose />
+              </DetailGroup>
+            )}
 
-            {/* Grouped under one heading, so three related warnings read as
-                one block instead of three lookalike paragraphs. */}
-            <DetailGroup title="Contre-indications">
-              <DetailRow label="Conduite" value={produit.contreIndicationConduite} prose />
-              <DetailRow label="Allaitement" value={produit.contreIndicationAllaitement} prose />
-              <DetailRow label="Grossesse" value={produit.contreIndicationGrossesse} prose />
-            </DetailGroup>
+            {(!estPara ||
+              [
+                produit.contreIndicationConduite,
+                produit.contreIndicationAllaitement,
+                produit.contreIndicationGrossesse,
+              ].some(estRenseigne)) && (
+              <DetailGroup title="Contre-indications">
+                <DetailRow label="Conduite" value={produit.contreIndicationConduite} prose />
+                <DetailRow label="Allaitement" value={produit.contreIndicationAllaitement} prose />
+                <DetailRow label="Grossesse" value={produit.contreIndicationGrossesse} prose />
+              </DetailGroup>
+            )}
 
-            <section className="space-y-sp-xs">
-              <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                Monographie
-              </h3>
-              <DetailBlock value={produit.monographie} />
-            </section>
+            {(!estPara || estRenseigne(produit.monographie)) && (
+              <section className="space-y-sp-xs">
+                <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                  Monographie
+                </h3>
+                <DetailBlock value={produit.monographie} />
+              </section>
+            )}
           </TabBody>
         </TabsContent>
       </Tabs>

@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import type { ClientModel } from "@/lib/db/generated/models";
+import type { ClientRecord } from "@/lib/server/clients";
 import { AvatarBadge } from "@/components/ui/avatar-badge";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { Eye } from "lucide-react";
 
-const columns: DataTableColumn<ClientModel>[] = [
+const columns: DataTableColumn<ClientRecord>[] = [
   {
     id: "name",
     header: "Nom",
@@ -34,7 +34,7 @@ export function ClientTable({
   search,
   onSearchChange,
 }: {
-  clients: ClientModel[];
+  clients: ClientRecord[];
   isLoading: boolean;
   search: string;
   onSearchChange: (value: string) => void;

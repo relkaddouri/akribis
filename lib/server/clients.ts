@@ -16,16 +16,34 @@ import { requireUser } from "@/lib/auth/session";
 import { clientFormSchema, type ClientFormInput } from "@/lib/validations/clients";
 import type { ClientModel } from "@/lib/db/generated/models";
 
+type DecimalField = "solde";
+
+/**
+ * Prisma `Decimal` n'est pas une valeur JSON — `solde` est aplati en nombre
+ * à cette frontière, comme dans les autres façades.
+ *
+ * Sans cette conversion, la valeur ne lève pas : elle arrive dans le
+ * navigateur en **chaîne de caractères**, silencieusement. `solde * 2`
+ * fonctionne alors par coercition, mais `solde + paiement` concatène
+ * ("0.00" + 100 = "0.00100"), `solde.toFixed(2)` échoue, et un tri se fait
+ * dans l'ordre alphabétique. Sur un solde client, ce sont des dirhams.
+ */
+export type ClientRecord = Omit<ClientModel, DecimalField> & { solde: number };
+
+function toClientRecord(client: ClientModel): ClientRecord {
+  return { ...client, solde: Number(client.solde) };
+}
+
 export type ListClientsParams = {
   /** Matches against name and phone (case-insensitive). */
   search?: string;
 };
 
-export async function listClients(params: ListClientsParams = {}): Promise<ClientModel[]> {
+export async function listClients(params: ListClientsParams = {}): Promise<ClientRecord[]> {
   const user = await requireUser();
   const search = params.search?.trim();
 
-  return prisma.client.findMany({
+  const clients = await prisma.client.findMany({
     where: {
       pharmacyId: user.pharmacyId,
       ...(search
@@ -39,6 +57,8 @@ export async function listClients(params: ListClientsParams = {}): Promise<Clien
     },
     orderBy: { name: "asc" },
   });
+
+  return clients.map(toClientRecord);
 }
 
 export type ClientPurchase = {
@@ -54,7 +74,7 @@ export type ClientPurchase = {
   }>;
 };
 
-export type ClientWithHistory = ClientModel & { purchases: ClientPurchase[] };
+export type ClientWithHistory = ClientRecord & { purchases: ClientPurchase[] };
 
 /** Purchase history comes from this client's sales, each with its line items. */
 export async function getClient(id: string): Promise<ClientWithHistory | null> {
@@ -76,7 +96,7 @@ export async function getClient(id: string): Promise<ClientWithHistory | null> {
   const { sales, ...clientFields } = client;
 
   return {
-    ...clientFields,
+    ...toClientRecord(clientFields),
     purchases: sales.map((sale) => ({
       saleId: sale.id,
       createdAt: sale.createdAt,
@@ -92,7 +112,7 @@ export async function getClient(id: string): Promise<ClientWithHistory | null> {
   };
 }
 
-export async function addClient(input: ClientFormInput): Promise<ClientModel> {
+export async function addClient(input: ClientFormInput): Promise<ClientRecord> {
   const user = await requireUser();
   const data = clientFormSchema.parse(input);
 
@@ -105,5 +125,5 @@ export async function addClient(input: ClientFormInput): Promise<ClientModel> {
   });
 
   revalidatePath("/dashboard/clients");
-  return client;
+  return toClientRecord(client);
 }

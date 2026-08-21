@@ -24,6 +24,29 @@ export type ProductRecord = {
   dci: string | null;
   photoUrl: string | null;
   category: string | null;
+  /**
+   * La famille PRD de la fiche catalogue liée (`PHARMACEUTIQUE`,
+   * `PARAPHARMACEUTIQUE`, `DISPOSITIF_MEDICAL`), recopiée du serveur.
+   *
+   * À ne pas confondre avec `category` juste au-dessus, qui porte la
+   * classe thérapeutique (« Antalgiques / Antipyrétiques ») et reste vide
+   * pour un produit de parapharmacie.
+   *
+   * `null` pour un produit saisi à la main, et absent des lignes mises en
+   * cache avant l'ajout de ce champ — les lecteurs retombent sur `null`
+   * jusqu'à la prochaine synchro descendante.
+   */
+  categorie: string | null;
+  sousCategorie: string | null;
+  /**
+   * Désactivé par l'officine : le produit reste au stock mais n'est plus
+   * proposé au comptoir ni à la commande. Recopié du serveur.
+   *
+   * Les lignes mises en cache avant l'ajout de ce champ ne le portent pas ;
+   * elles sont relues comme actives, ce qui est le bon défaut — un cache
+   * incomplet ne doit jamais faire disparaître un produit du comptoir.
+   */
+  actifLocalement: boolean;
   price: number;
   pph: number | null;
   tvaVente: number | null;
