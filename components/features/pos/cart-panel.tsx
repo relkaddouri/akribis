@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Banknote,
   CreditCard,
   Minus,
@@ -18,6 +19,8 @@ import {
 import { computeChange, quickCashAmounts } from "@/lib/pos/change";
 import { calculerPartage, contientRemboursable } from "@/lib/pos/tiers-payant";
 import type { OrganismeRecord } from "@/lib/server/organismes";
+import { depassementPlafondCredit } from "@/lib/clients/plafond";
+import type { SelectedClient } from "@/components/features/pos/client-picker";
 import {
   Select,
   SelectContent,
@@ -237,7 +240,7 @@ export function CheckoutPanel({
   onValidate,
   isSubmitting,
   canValidate,
-  hasClient,
+  client,
   organismes,
   insurerId,
   onChangeInsurer,
@@ -252,14 +255,20 @@ export function CheckoutPanel({
   onValidate: () => void;
   isSubmitting: boolean;
   canValidate: boolean;
-  /** Credit is only offered with a client attached — nobody to bill otherwise. */
-  hasClient: boolean;
+  /**
+   * Le client attaché à la vente, `null` pour un client de passage. Il
+   * porte le solde et le plafond, dont dépend l'avertissement de
+   * dépassement, et l'affiliation, qui pré-remplit le tiers payant.
+   */
+  client: SelectedClient;
   /** Les organismes actifs de l'officine. Vide = aucun conventionnement. */
   organismes: OrganismeRecord[];
   insurerId: string | null;
   onChangeInsurer: (insurerId: string | null) => void;
 }) {
   const total = computeCartTotal(lines);
+  /** Credit is only offered with a client attached — nobody to bill otherwise. */
+  const hasClient = client !== null;
 
   // Le sélecteur n'apparaît que s'il y a de quoi rembourser : le proposer
   // sur un panier de parapharmacie promettrait une prise en charge que le
@@ -279,6 +288,22 @@ export function CheckoutPanel({
    * client qui est devant le comptoir.
    */
   const aEncaisser = partage.partClient;
+
+  /**
+   * Le dépassement porte sur le **total**, pas sur la part client : c'est
+   * le total que lib/server/sales.ts porte au compte sur une vente à
+   * crédit (`creditSaleMovement(totalAmount)`). Avertir sur un montant
+   * plus faible que celui réellement débité minimiserait le risque au
+   * moment précis où le pharmacien décide.
+   */
+  const depassement =
+    paymentMethod === "CREDIT" && client
+      ? depassementPlafondCredit({
+          solde: client.solde,
+          plafondCredit: client.plafondCredit,
+          montantACrediter: total,
+        })
+      : null;
   const quickAmounts = quickCashAmounts(aEncaisser);
 
   return (
@@ -311,6 +336,20 @@ export function CheckoutPanel({
               ))}
             </SelectContent>
           </Select>
+          {/* L'immatriculation vient de la fiche client et s'affiche en
+              rappel : c'est elle que l'organisme rapprochera sur le
+              bordereau, et une vente saisie sous un numéro absent revient
+              en rejet des semaines plus tard. Elle n'est pas modifiable
+              ici — la table `sales` n'a pas de colonne où loger une
+              valeur propre à une vente. */}
+          {client?.numeroImmatriculation && insurerId !== null && (
+            <p className="text-xs text-muted-foreground">
+              Immatriculation {client.name} :{" "}
+              <span className="font-medium text-foreground">
+                {client.numeroImmatriculation}
+              </span>
+            </p>
+          )}
         </div>
       )}
       {/* Plus de `sticky` : ce bloc occupe désormais sa propre colonne, et
@@ -396,6 +435,33 @@ export function CheckoutPanel({
               : "Crédit client — associez un client"}
           </Button>
         </div>
+
+        {/* Avertir, jamais bloquer : le plafond est une consigne de
+            gestion, et c'est le pharmacien, qui a le client devant lui,
+            qui décide. Le bouton de validation reste actif — mais
+            l'alerte est en rouge, au-dessus de lui, et impossible à
+            manquer. */}
+        {depassement && (
+          <div
+            role="alert"
+            className="flex items-start gap-sp-sm rounded-lg border border-destructive/40 bg-destructive/10 p-sp-md text-sm text-destructive"
+          >
+            <AlertTriangle className="mt-0.5 size-5 shrink-0" />
+            <div className="space-y-0.5">
+              <p className="font-semibold">
+                Plafond de crédit dépassé de{" "}
+                {formatMoney(depassement.depassement)} MAD
+              </p>
+              <p className="text-destructive/90">
+                {client?.name} doit déjà{" "}
+                {formatMoney(depassement.encoursActuel)} MAD ; cette vente
+                porterait son encours à {formatMoney(depassement.encoursApres)}{" "}
+                MAD, pour un plafond de {formatMoney(depassement.plafond)} MAD.
+                La vente reste possible.
+              </p>
+            </div>
+          </div>
+        )}
 
         {paymentMethod === "CASH" && (
           <div className="space-y-sp-sm">

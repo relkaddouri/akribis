@@ -66,7 +66,7 @@ function rendrePanier(options: {
       onValidate={() => {}}
       isSubmitting={false}
       canValidate
-      hasClient={false}
+      client={null}
       organismes={options.organismes ?? [CNSS]}
       insurerId={options.insurerId ?? null}
       onChangeInsurer={options.onChangeInsurer ?? (() => {})}
@@ -430,5 +430,52 @@ describe("le plein écran de la caisse", () => {
   it("offre un aller-retour, pas un aller simple", () => {
     expect(src()).toContain("Quitter le plein écran");
     expect(src()).toContain("Plein écran");
+  });
+});
+
+/**
+ * Le tiers payant proposé d'après la fiche client.
+ *
+ * Vérifié sur la source, faute de mieux : `PosView` monte la couche hors
+ * ligne (Dexie, file de synchronisation) dès l'import, et aucun test du
+ * dépôt ne la rend. Ce que ces assertions verrouillent, c'est la forme du
+ * mécanisme — proposé à la sélection, et non réappliqué en boucle — parce
+ * que c'est justement la version en effet qui paraît la plus naturelle à
+ * écrire et qui écraserait le choix du pharmacien à chaque rendu.
+ */
+describe("l'organisme du client pré-remplit le tiers payant", () => {
+  const source = readFileSync(
+    resolve(__dirname, "../..", "components/features/pos/pos-view.tsx"),
+    "utf8",
+  );
+  const choisirClient = /const choisirClient = useCallback\([\s\S]*?\n  \}, \[\]\);/.exec(source);
+
+  it("existe, et s'applique au moment du choix", () => {
+    expect(choisirClient, "choisirClient introuvable").toBeTruthy();
+    expect(choisirClient![0]).toMatch(/setInsurerId\(choisi\?\.insurerId \?\? null\)/);
+    expect(source).toMatch(/onChange=\{choisirClient\}/);
+  });
+
+  it("ne passe pas par un effet, qui écraserait un choix manuel", () => {
+    expect(source).not.toMatch(/useEffect\([^)]*\)[\s\S]{0,200}setInsurerId\(client/);
+  });
+
+  it("laisse le sélecteur modifiable pour la vente en cours", () => {
+    // `onChangeInsurer` reste branché sur le `setInsurerId` brut : le
+    // pré-remplissage est une proposition, pas un verrou.
+    expect(source).toMatch(/onChangeInsurer=\{setInsurerId\}/);
+  });
+
+  it("remet le sélecteur à zéro quand le client est retiré", () => {
+    // L'organisme retenu était le sien ; le laisser en place réclamerait
+    // pour un assuré qui n'est plus sur la vente.
+    expect(choisirClient![0]).toContain("?? null");
+  });
+
+  it("ouvre le sélecteur sur F4, sans casser quand il n'est pas affiché", () => {
+    // Le champ n'existe que si le panier contient de quoi rembourser.
+    expect(source).toMatch(/event\.key === "F4"/);
+    expect(source).toMatch(/getElementById\("organisme-vente"\)/);
+    expect(source).toMatch(/if \(selecteur\) \{/);
   });
 });
