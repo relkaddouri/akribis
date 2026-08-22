@@ -9,7 +9,37 @@ import { Button } from "@/components/ui/button";
 
 const SEARCH_DEBOUNCE_MS = 200;
 
-export type SelectedClient = { id: string; name: string } | null;
+import type { ClientRecord } from "@/lib/server/clients";
+
+/**
+ * Ce que la caisse retient du client, au-delà de son nom.
+ *
+ * Le solde et le plafond servent à l'avertissement de dépassement ;
+ * l'organisme et l'immatriculation à proposer le tiers payant par défaut.
+ * Recopiés au moment du choix plutôt que relus à la validation : au comptoir
+ * la fiche ne bouge pas entre les deux, et une requête de plus par vente
+ * n'apprendrait rien.
+ */
+export type SelectedClient = {
+  id: string;
+  name: string;
+  /** Négatif = le client doit à la pharmacie. Convention lib/clients/account.ts. */
+  solde: number;
+  plafondCredit: number | null;
+  insurerId: string | null;
+  numeroImmatriculation: string | null;
+} | null;
+
+function versSelection(client: ClientRecord): SelectedClient {
+  return {
+    id: client.id,
+    name: client.name,
+    solde: client.solde,
+    plafondCredit: client.plafondCredit,
+    insurerId: client.insurerId,
+    numeroImmatriculation: client.numeroImmatriculation,
+  };
+}
 
 /**
  * Inline client selector, sitting at the top of the cart.
@@ -58,7 +88,7 @@ export function ClientPicker({
     mutationFn: addClient,
     onSuccess: (client) => {
       queryClient.invalidateQueries({ queryKey: ["clients"] });
-      select({ id: client.id, name: client.name });
+      select(versSelection(client));
     },
   });
 
@@ -133,7 +163,7 @@ export function ClientPicker({
             <li key={client.id}>
               <button
                 type="button"
-                onClick={() => select({ id: client.id, name: client.name })}
+                onClick={() => select(versSelection(client))}
                 className="flex w-full items-center justify-between gap-sp-md rounded-md px-sp-md py-sp-sm text-left transition-colors hover:bg-accent"
               >
                 <span className="truncate font-medium text-foreground">{client.name}</span>

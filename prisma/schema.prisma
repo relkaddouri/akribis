@@ -183,11 +183,47 @@ model StockMovement {
   @@map("stock_movements")
 }
 
+/// Le rapport de l'officine au client. « Occasionnel » par défaut : c'est
+/// ce qu'est un client créé au comptoir en pleine vente, et le titulaire
+/// requalifie ensuite depuis la fiche.
+enum TypeClient {
+  REGULIER      @map("regulier")
+  OCCASIONNEL   @map("occasionnel")
+  PROFESSIONNEL @map("professionnel")
+
+  @@map("type_client")
+}
+
 model Client {
-  id             String  @id @default(uuid())
-  pharmacyId     String  @map("pharmacy_id")
-  name           String
-  phone          String?
+  id         String     @id @default(uuid())
+  pharmacyId String     @map("pharmacy_id")
+  name       String
+  phone      String?
+  email      String?
+  typeClient TypeClient @default(OCCASIONNEL) @map("type_client")
+
+  /// Données personnelles au sens de la loi 09-08 : leur consultation et
+  /// leur modification sont journalisées dans `event_log`, sous les
+  /// actions `client.consultation` et `client.modifie`.
+  cin             String?
+  medecinTraitant String? @map("medecin_traitant")
+
+  adresse    String?
+  codePostal String? @map("code_postal")
+  ville      String?
+  pays       String? @default("Maroc")
+
+  /// Immatriculation AMO/CNSS/CNOPS ou assurance privée, et l'organisme
+  /// qui la reconnaît. L'organisme est une relation, jamais un libellé
+  /// libre : le même « CNSS » écrit à la main sur mille fiches ne se
+  /// rapproche d'aucun bordereau.
+  numeroImmatriculation String? @map("numero_immatriculation")
+  insurerId             String? @map("insurer_id")
+
+  /// Encours maximal autorisé en vente à crédit, fixé par le titulaire.
+  /// Nul = pas de plafond. Il avertit, il ne bloque pas : c'est le
+  /// pharmacien qui décide en dernier ressort, devant le client.
+  plafondCredit  Decimal? @map("plafond_credit") @db.Decimal(12, 2)
   /// Running account balance. NEGATIVE means the client owes the pharmacy
   /// (credit sale), POSITIVE means the pharmacy owes the client.
   ///
@@ -195,18 +231,20 @@ model Client {
   /// one database transaction — see recordClientTransaction() in
   /// lib/server/client-account.ts, the single writer. It must always equal
   /// the sum of the client's transaction amounts.
-  solde          Decimal @default(0) @db.Decimal(12, 2)
-  pointsFidelite Int     @default(0) @map("points_fidelite")
+  solde          Decimal  @default(0) @db.Decimal(12, 2)
+  pointsFidelite Int      @default(0) @map("points_fidelite")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  pharmacy     Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  pharmacy     Pharmacy              @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  insurer      OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
   sales        Sale[]
   transactions ClientTransaction[]
   reminders    ClientReminder[]
 
   @@index([pharmacyId])
+  @@index([insurerId])
   @@map("clients")
 }
 
@@ -1239,6 +1277,7 @@ model OrganismeTiersPayant {
   pharmacy   Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   ventes     Sale[]
   bordereaux Bordereau[]
+  clients    Client[]
 
   @@unique([pharmacyId, code])
   @@index([pharmacyId, actif])

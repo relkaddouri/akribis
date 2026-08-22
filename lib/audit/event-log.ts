@@ -25,6 +25,16 @@ export const TYPES_ACTION = {
   catalogueProduitReactive: "catalogue.produit.reactive",
   /** Un des autres drapeaux nationaux : ordonnance, froid, commercialisé. */
   catalogueProduitDrapeau: "catalogue.produit.drapeau_modifie",
+
+  /**
+   * La fiche client. Elle porte le CIN et le médecin traitant, données
+   * personnelles au sens de la loi 09-08 : la **consultation** y est
+   * journalisée au même titre que la modification, ce qui n'est le cas
+   * d'aucune autre entité — savoir qui a lu la fiche fait partie de ce
+   * qu'un contrôle CNDP demande.
+   */
+  clientConsultation: "client.consultation",
+  clientModifie: "client.modifie",
 } as const;
 
 export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
@@ -32,6 +42,7 @@ export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
 /** L'entité visée. Texte libre en base, liste fermée ici. */
 export const ENTITES = {
   catalogueProduit: "catalogue_produit",
+  client: "client",
 } as const;
 
 export type Acteur = { id: string; email: string; role: string };
@@ -104,6 +115,8 @@ export const LIBELLES_ACTION: Record<string, string> = {
   [TYPES_ACTION.catalogueProduitDesactive]: "Fiche désactivée",
   [TYPES_ACTION.catalogueProduitReactive]: "Fiche réactivée",
   [TYPES_ACTION.catalogueProduitDrapeau]: "Statut modifié",
+  [TYPES_ACTION.clientConsultation]: "Fiche client consultée",
+  [TYPES_ACTION.clientModifie]: "Fiche client modifiée",
 };
 
 export function libelleAction(typeAction: string): string {

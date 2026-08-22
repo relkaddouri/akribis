@@ -155,6 +155,24 @@ export function PosView() {
     },
   });
 
+  /**
+   * Choisir un client propose son organisme d'affiliation.
+   *
+   * Proposé, pas imposé : le sélecteur reste ouvert, et une vente peut
+   * très bien se faire hors tiers payant pour un client conventionné.
+   * C'est fait ici, à la sélection, et non dans un effet — un effet
+   * réappliquerait l'affiliation à chaque rendu et écraserait le choix
+   * que le pharmacien vient de faire à la main.
+   *
+   * Retirer le client remet le sélecteur à zéro : l'organisme retenu
+   * était le sien, le laisser en place réclamerait pour un assuré qui
+   * n'est plus sur la vente.
+   */
+  const choisirClient = useCallback((choisi: SelectedClient) => {
+    setClient(choisi);
+    setInsurerId(choisi?.insurerId ?? null);
+  }, []);
+
   const clearCart = useCallback(() => {
     setLines([]);
     setPaymentMethod(null);
@@ -174,6 +192,21 @@ export function PosView() {
       if (!canValidate || mutation.isPending) return;
       event.preventDefault();
       mutation.mutate();
+      return;
+    }
+    /**
+     * F4 ouvre le sélecteur de tiers payant. Le champ n'existe que si le
+     * panier contient de quoi rembourser : sur un panier de
+     * parapharmacie, la touche ne fait rien, ce qui vaut mieux que de
+     * déplacer le focus vers un endroit sans rapport.
+     */
+    if (event.key === "F4") {
+      const selecteur = document.getElementById("organisme-vente");
+      if (selecteur) {
+        event.preventDefault();
+        selecteur.focus();
+        selecteur.click();
+      }
       return;
     }
     if (event.key === "Escape") {
@@ -285,7 +318,7 @@ export function PosView() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-sp-md lg:sticky lg:top-sp-lg">
-          <ClientPicker value={client} onChange={setClient} />
+          <ClientPicker value={client} onChange={choisirClient} />
 
           {warning && (
             <Alert variant="destructive">
@@ -310,7 +343,7 @@ export function PosView() {
             onValidate={() => mutation.mutate()}
             isSubmitting={mutation.isPending}
             canValidate={canValidate}
-            hasClient={client !== null}
+            client={client}
             organismes={organismes}
             insurerId={insurerId}
             onChangeInsurer={setInsurerId}
