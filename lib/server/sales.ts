@@ -305,10 +305,22 @@ export async function createSale(
       // break the balance/history invariant that lib/server/client-account.ts
       // guarantees.
       if (parsed.paymentMethod === "CREDIT") {
+        /**
+         * La part client, et jamais le total.
+         *
+         * La part organisme est déjà partie en réclamation : `statutCreance`
+         * ci-dessus la met sur un bordereau, et c'est l'organisme qui la
+         * règle. La porter aussi au compte du client la ferait encaisser
+         * deux fois — et définitivement, car le règlement d'un bordereau
+         * (lib/server/bordereaux.ts) ne touche pas au compte client : il
+         * bascule `statutCreance` à PAYEE, sans écriture compensatoire.
+         *
+         * Sans organisme, `partClient` vaut le total et rien ne change.
+         */
         await recordClientTransaction(tx, user.pharmacyId, {
           clientId: client.id,
           type: "vente",
-          montant: creditSaleMovement(totalAmount),
+          montant: creditSaleMovement(partage.partClient),
           saleId: sale.id,
           description: "Vente à crédit",
         });
