@@ -1,6 +1,8 @@
 import { getBordereau } from "@/lib/server/bordereaux";
 import { getReceiptBranding } from "@/lib/server/pharmacy";
 import { renderBordereauPdf } from "@/lib/bordereaux/pdf";
+import { ENTITES } from "@/lib/audit/event-log";
+import { journaliserTelechargement } from "@/lib/audit/export-document";
 
 /**
  * Le bordereau en PDF, prêt à imprimer et à envoyer.
@@ -16,6 +18,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!bordereau) {
     return new Response("Bordereau introuvable", { status: 404 });
   }
+
+  await journaliserTelechargement({
+    entite: ENTITES.bordereau,
+    entiteId: bordereau.id,
+    nom: bordereau.numero,
+  });
 
   const pdf = await renderBordereauPdf(bordereau, branding);
 

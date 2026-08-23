@@ -2,6 +2,8 @@ import { getDelivery } from "@/lib/server/orders";
 import { getReceiptBranding } from "@/lib/server/pharmacy";
 import { renderDeliveryNotePdf } from "@/lib/orders/delivery-note-pdf";
 import { formatDeliveryNumber } from "@/lib/orders/numbering";
+import { ENTITES } from "@/lib/audit/event-log";
+import { journaliserTelechargement } from "@/lib/audit/export-document";
 
 /**
  * Streams one delivery note as a downloadable PDF. getDelivery() is
@@ -20,6 +22,12 @@ export async function GET(
   if (!delivery) {
     return new Response("Bon de livraison introuvable", { status: 404 });
   }
+
+  await journaliserTelechargement({
+    entite: ENTITES.bonLivraison,
+    entiteId: delivery.id,
+    nom: formatDeliveryNumber(delivery.numero),
+  });
 
   const pdf = await renderDeliveryNotePdf(delivery, branding);
 

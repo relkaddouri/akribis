@@ -52,6 +52,36 @@ export const TYPES_ACTION = {
    * propres extractions aurait un angle mort à l'endroit le plus exposé.
    */
   journalExporte: "journal.exporte",
+
+  venteCreee: "vente.creee",
+  venteRetour: "vente.retour",
+
+  avoirFournisseurEmis: "avoir_fournisseur.emis",
+  avoirFournisseurRecu: "avoir_fournisseur.recu",
+
+  factureGeneree: "facture.generee",
+
+  utilisateurConnexion: "utilisateur.connexion",
+  utilisateurDeconnexion: "utilisateur.deconnexion",
+  utilisateurInvite: "utilisateur.invite",
+  /**
+   * Déclaré sans être branché : l'application ne change pas le rôle d'un
+   * compte existant. Un titulaire l'est depuis son inscription, un
+   * assistant depuis son invitation, et rien ne fait passer de l'un à
+   * l'autre. Le vocabulaire attend la fonctionnalité.
+   */
+  utilisateurRoleModifie: "utilisateur.role_modifie",
+
+  /**
+   * Le téléchargement d'un document — facture, bordereau, bon de
+   * commande, bon de livraison. L'entité dit lequel.
+   *
+   * Distinct de `journal.exporte`, et volontairement : extraire le
+   * registre d'audit est un geste d'une autre nature que télécharger une
+   * facture, et les confondre noierait le premier sous le second dès
+   * qu'on filtre sur « qui a exporté quoi ».
+   */
+  documentExporte: "document.exporte",
 } as const;
 
 export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
@@ -62,6 +92,13 @@ export const ENTITES = {
   client: "client",
   /** Le journal lui-même, pour tracer ses extractions. */
   journal: "journal",
+  vente: "vente",
+  avoirFournisseur: "avoir_fournisseur",
+  facture: "facture",
+  utilisateur: "utilisateur",
+  bordereau: "bordereau",
+  bonCommande: "bon_commande",
+  bonLivraison: "bon_livraison",
 } as const;
 
 export type Acteur = { id: string; email: string; role: string };
@@ -139,6 +176,16 @@ export const LIBELLES_ACTION: Record<string, string> = {
   [TYPES_ACTION.clientModifie]: "Fiche client modifiée",
   [TYPES_ACTION.clientSupprime]: "Fiche client supprimée",
   [TYPES_ACTION.journalExporte]: "Journal exporté",
+  [TYPES_ACTION.venteCreee]: "Vente enregistrée",
+  [TYPES_ACTION.venteRetour]: "Retour de vente",
+  [TYPES_ACTION.avoirFournisseurEmis]: "Avoir fournisseur émis",
+  [TYPES_ACTION.avoirFournisseurRecu]: "Avoir fournisseur réceptionné",
+  [TYPES_ACTION.factureGeneree]: "Facture générée",
+  [TYPES_ACTION.utilisateurConnexion]: "Connexion",
+  [TYPES_ACTION.utilisateurDeconnexion]: "Déconnexion",
+  [TYPES_ACTION.utilisateurInvite]: "Assistant invité",
+  [TYPES_ACTION.utilisateurRoleModifie]: "Rôle modifié",
+  [TYPES_ACTION.documentExporte]: "Document exporté",
 };
 
 export function libelleAction(typeAction: string): string {

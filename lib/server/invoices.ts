@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/lib/db/generated/client";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { formatInvoiceNumber } from "@/lib/invoices/numbering";
 import { computeInvoiceTotals, type InvoiceLineInput } from "@/lib/invoices/totals";
 
@@ -226,6 +227,23 @@ export async function createInvoiceFromSales(saleIds: string[]): Promise<CreateI
     await tx.sale.updateMany({
       where: { id: { in: uniqueSaleIds }, pharmacyId: user.pharmacyId },
       data: { invoiceId: invoice.id },
+    });
+
+    // Une facture engage l'officine devant l'administration fiscale, et
+    // son numéro n'est jamais réattribué : savoir qui l'a émise, et à
+    // partir de quelles ventes, fait partie de ce qui la rend auditable.
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.factureGeneree,
+      entite: ENTITES.facture,
+      entiteId: invoice.id,
+      pharmacyId: user.pharmacyId,
+      apres: {
+        nom: invoice.number,
+        totalTtc: totals.totalTtc,
+        ventes: uniqueSaleIds.length,
+        client: sales[0]?.client?.name ?? null,
+      },
     });
 
     revalidatePath("/factures");
