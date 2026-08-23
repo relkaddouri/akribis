@@ -16,6 +16,7 @@ import {
  * being quietly absorbed.
  */
 const state = vi.hoisted(() => ({
+  journal: [] as Record<string, unknown>[],
   suppliers: [{ id: "supplier-1", pharmacyId: "pharmacy-1", name: "Pharma Distrib" }],
   orders: [{ id: "order-1", pharmacyId: "pharmacy-1" }],
   products: [] as Array<{ id: string; pharmacyId: string; name: string; quantityInStock: number }>,
@@ -107,12 +108,32 @@ function makeTx() {
         }
         return { id: credit.id, numero: credit.numero };
       },
-      findFirst: async ({ where }: { where: { id: string } }) =>
-        state.credits.find((c) => c.id === where.id) ?? null,
+      findFirst: async ({ where }: { where: { id: string } }) => {
+        // Une **copie**, comme le vrai Prisma qui matérialise un objet neuf
+        // depuis la ligne. Renvoyer la référence vive faisait muter l'état
+        // « avant » sous le nez du journal quand `update` écrivait ensuite.
+        const trouve = state.credits.find((c) => c.id === where.id);
+        return trouve ? { ...trouve } : null;
+      },
       update: async ({ where, data }: { where: { id: string }; data: { statut: string } }) => {
         const credit = state.credits.find((c) => c.id === where.id);
         if (credit) credit.statut = data.statut;
         return credit;
+      },
+    },
+    // Ajouté avec la journalisation. Le journal est en ajout seul,
+    // garanti par un déclencheur en base : le faux refuse donc les deux
+    // autres opérations, comme la base le ferait.
+    eventLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        state.journal.push({ ...data });
+        return data;
+      },
+      update: async () => {
+        throw new Error("event_log est un journal en ajout seul : UPDATE refuse.");
+      },
+      delete: async () => {
+        throw new Error("event_log est un journal en ajout seul : DELETE refuse.");
       },
     },
   };
@@ -151,6 +172,7 @@ beforeEach(() => {
   state.credits = [];
   state.creditItems = [];
   state.stockMovements = [];
+  state.journal = [];
   state.counters = new Map();
 });
 
@@ -334,5 +356,66 @@ describe("credit rules", () => {
         { productId: "b", quantite: 7, unitPrice: 1.11 },
       ]),
     ).toBe(17.76);
+  });
+});
+
+/**
+ * La journalisation des avoirs fournisseurs.
+ *
+ * Deux événements distincts, et c'est le point : l'émission fait sortir
+ * la marchandise, la réception ne fait que clore le dossier. Le journal
+ * doit les distinguer, comme le stock les distingue déjà — c'est ce que
+ * vérifient les assertions ci-dessus, inchangées.
+ */
+describe("journalisation d'un avoir fournisseur", () => {
+  it("écrit une entrée d'émission, sans état « avant »", async () => {
+    const avoir = await createSupplierCredit({
+      supplierId: "supplier-1",
+      motif: "produit_endommage",
+      lines: [{ productId: "p1", quantite: 5, unitPrice: 10 }],
+    });
+
+    expect(state.journal).toHaveLength(1);
+    const trace = state.journal[0]!;
+    expect(trace.typeAction).toBe("avoir_fournisseur.emis");
+    expect(trace.entite).toBe("avoir_fournisseur");
+    expect(trace.entiteId).toBe(avoir.id);
+    expect(trace.avant).toBeUndefined();
+    expect(trace.apres).toMatchObject({ nom: `Avoir n° ${avoir.numero}`, lignes: 1 });
+  });
+
+  it("écrit une seconde entrée à la réception, avec l'avant et l'après", async () => {
+    const avoir = await createSupplierCredit({
+      supplierId: "supplier-1",
+      motif: "produit_endommage",
+      lines: [{ productId: "p1", quantite: 5, unitPrice: 10 }],
+    });
+
+    await settleSupplierCredit(avoir.id, "especes");
+
+    expect(state.journal).toHaveLength(2);
+    const trace = state.journal[1]!;
+    expect(trace.typeAction).toBe("avoir_fournisseur.recu");
+    // Un changement d'état : c'est exactement ce qu'un avant/après montre.
+    expect(trace.avant).toMatchObject({ statut: "EMIS" });
+    expect(trace.apres).toMatchObject({ statut: "RECU", modeCompensation: "especes" });
+  });
+
+  it("n'écrit rien sur une réception refusée", async () => {
+    // Réceptionner deux fois est déjà refusé par la garde de transition ;
+    // la trace ne doit pas contredire ce refus en laissant croire qu'il
+    // s'est passé quelque chose.
+    const avoir = await createSupplierCredit({
+      supplierId: "supplier-1",
+      motif: "produit_endommage",
+      lines: [{ productId: "p1", quantite: 5, unitPrice: 10 }],
+    });
+    await settleSupplierCredit(avoir.id, "especes");
+    const avant = state.journal.length;
+
+    await expect(settleSupplierCredit(avoir.id, "especes")).rejects.toThrow(
+      "déjà été réceptionné",
+    );
+    expect(state.journal).toHaveLength(avant);
   });
 });

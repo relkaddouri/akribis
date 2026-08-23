@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/lib/db/generated/client";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { baseAppliquee } from "@/lib/pos/tiers-payant";
 import {
   computeReturnStatus,
@@ -398,6 +399,28 @@ export async function createSaleReturn(
     await tx.sale.update({
       where: { id: sale.id },
       data: { returnStatus: status.toUpperCase() as "NONE" | "PARTIAL" | "FULL" },
+    });
+
+    // L'avant/après porte sur le statut de retour de la vente : c'est la
+    // seule chose que l'opération change sur une ligne existante, et
+    // « aucun → partiel » se relit d'un coup d'œil dans le journal.
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.venteRetour,
+      entite: ENTITES.vente,
+      entiteId: sale.id,
+      pharmacyId: user.pharmacyId,
+      avant: {
+        nom: formatSaleReference(sale.id),
+        statutRetour: sale.returnStatus,
+      },
+      apres: {
+        nom: formatSaleReference(sale.id),
+        statutRetour: status.toUpperCase(),
+        rembourse: validation.totalRefund,
+        lignes: validation.lines.length,
+        rappelDeLot: input.isLotRecall === true,
+      },
     });
 
     revalidatePath("/ventes");

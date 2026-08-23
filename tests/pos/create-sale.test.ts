@@ -69,6 +69,7 @@ const state = vi.hoisted(() => {
     insurers: [] as FakeInsurer[],
     accountMovements: [] as FakeAccountMovement[],
     loyaltyAwards: [] as { clientId: string; points: number }[],
+    journal: [] as Record<string, unknown>[],
     nextSaleId: 1,
   };
 });
@@ -144,6 +145,21 @@ function makeTx() {
     pharmacy: {
       findUniqueOrThrow: async () => ({ loyaltyRate: 1 }),
     },
+    // Ajouté avec la journalisation des ventes. Le journal est en ajout
+    // seul, garanti par un déclencheur en base : le faux refuse donc les
+    // deux autres opérations, comme la base le ferait.
+    eventLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        state.journal.push({ ...data });
+        return data;
+      },
+      update: async () => {
+        throw new Error("event_log est un journal en ajout seul : UPDATE refuse.");
+      },
+      delete: async () => {
+        throw new Error("event_log est un journal en ajout seul : DELETE refuse.");
+      },
+    },
   };
 }
 
@@ -155,6 +171,7 @@ vi.mock("@/lib/db/client", () => ({
         sales: [...state.sales],
         saleItems: [...state.saleItems],
         stockMovements: [...state.stockMovements],
+        journal: [...state.journal],
       };
       try {
         return await fn(makeTx());
@@ -163,6 +180,9 @@ vi.mock("@/lib/db/client", () => ({
         state.sales = snapshot.sales;
         state.saleItems = snapshot.saleItems;
         state.stockMovements = snapshot.stockMovements;
+        // Annulé avec le reste : une vente refusée ne doit pas laisser
+        // derrière elle la trace d'une vente qui n'a pas eu lieu.
+        state.journal = snapshot.journal;
         throw err;
       }
     },
@@ -242,6 +262,7 @@ beforeEach(() => {
   state.insurers = [];
   state.accountMovements = [];
   state.loyaltyAwards = [];
+  state.journal = [];
   state.nextSaleId = 1;
 });
 
@@ -526,5 +547,56 @@ describe("une vente à crédit chez un client conventionné", () => {
 
     expect(state.accountMovements).toEqual([]);
     expect(state.sales[0]).toMatchObject({ statutCreance: "EN_ATTENTE_BORDEREAU" });
+  });
+});
+
+/**
+ * La journalisation des ventes.
+ *
+ * Ajoutée **à côté** de la logique de vente, jamais dedans : c'est ce que
+ * vérifient d'abord les dizaines d'assertions déjà présentes dans ce
+ * fichier, qui portent sur le stock, les montants, le compte client et le
+ * remboursement, et qui doivent continuer de passer à l'identique.
+ */
+describe("journalisation d'une vente", () => {
+  const derniere = () => state.journal.at(-1)!;
+
+  it("écrit une entrée du bon type après la vente", async () => {
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    const recu = await createSale({
+      paymentMethod: "CASH",
+      items: [{ productId: "p1", quantity: 2 }],
+    });
+
+    expect(state.journal).toHaveLength(1);
+    expect(derniere().typeAction).toBe("vente.creee");
+    expect(derniere().entite).toBe("vente");
+    expect(derniere().entiteId).toBe(recu.id);
+    expect(derniere().pharmacyId).toBe("pharmacy-1");
+  });
+
+  it("n'a pas d'état « avant », et retient ce qui se relit sans rouvrir la vente", async () => {
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await createSale({ paymentMethod: "CARD", items: [{ productId: "p1", quantity: 2 }] });
+
+    // La vente n'existait pas : un « avant » serait une invention.
+    expect(derniere().avant).toBeUndefined();
+    expect(derniere().apres).toMatchObject({ montant: 25, paiement: "CARD", lignes: 1 });
+  });
+
+  it("n'écrit rien quand la vente est refusée", async () => {
+    // Le point qui compte : la trace est dans la transaction. Une vente
+    // annulée pour survente ne doit pas laisser derrière elle la marque
+    // d'une vente qui n'a pas eu lieu.
+    seedProduct({ id: "p1", quantityInStock: 1, price: 12.5 });
+
+    await expect(
+      createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 5 }] }),
+    ).rejects.toThrow();
+
+    expect(state.journal).toHaveLength(0);
+    expect(state.sales).toHaveLength(0);
   });
 });

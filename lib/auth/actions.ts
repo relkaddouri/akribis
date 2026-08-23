@@ -14,7 +14,8 @@ import {
   RESET_PASSWORD_PATH,
   defaultPathForRole,
 } from "@/lib/auth/access-control";
-import { getSessionRoleFromUser } from "@/lib/auth/roles";
+import { getPharmacyIdFromUser, getSessionRoleFromUser } from "@/lib/auth/roles";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { isRateLimited } from "@/lib/auth/rate-limit";
 import {
   forgotPasswordSchema,
@@ -25,6 +26,37 @@ import {
 } from "@/lib/validations/auth";
 
 export type ActionState = { error?: string; success?: boolean };
+
+/**
+ * Journalise un événement de compte sans jamais faire échouer l'action.
+ *
+ * Une connexion refusée parce que le journal était indisponible mettrait
+ * l'officine à l'arrêt pour une écriture accessoire. Sur les actions
+ * métier la trace est dans la transaction, et l'échec des deux ensemble
+ * est le comportement voulu ; ici l'authentification passe par Supabase
+ * et non par Prisma, il n'y a pas de transaction commune à partager. Le
+ * choix est donc explicite : la trace cède le pas à l'accès.
+ */
+async function journaliserCompte(entree: {
+  typeAction: (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
+  acteur: { id: string; email: string; role: string };
+  pharmacyId: string | null;
+  cible?: string;
+  apres?: unknown;
+}): Promise<void> {
+  try {
+    await journaliser(prisma, {
+      acteur: entree.acteur,
+      typeAction: entree.typeAction,
+      entite: ENTITES.utilisateur,
+      entiteId: entree.cible ?? entree.acteur.id,
+      pharmacyId: entree.pharmacyId,
+      apres: entree.apres,
+    });
+  } catch {
+    // Silencieux à dessein — voir ci-dessus.
+  }
+}
 
 async function getAppOrigin(): Promise<string> {
   const h = await headers();
@@ -58,10 +90,18 @@ export async function signInAction(
     return { error: "Identifiants incorrects" };
   }
 
+  const role = getSessionRoleFromUser(data.user);
+  // Avant le `redirect()`, qui lève : rien ne s'exécute après lui.
+  await journaliserCompte({
+    typeAction: TYPES_ACTION.utilisateurConnexion,
+    acteur: { id: data.user.id, email: data.user.email ?? parsed.data.email, role: role ?? "?" },
+    pharmacyId: getPharmacyIdFromUser(data.user),
+  });
+
   // Akribis staff have no pharmacy dashboard. The middleware would bounce
   // them anyway, but sending them straight to the back-office spares a
   // visible redirect through a page they can never see.
-  redirect(defaultPathForRole(getSessionRoleFromUser(data.user)));
+  redirect(defaultPathForRole(role));
 }
 
 /**
@@ -149,7 +189,24 @@ export async function signUpOwnerAction(
 
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
+  // Lu AVANT la déconnexion : après, la session n'existe plus et le
+  // journal ne saurait plus qui vient de partir.
+  const { data } = await supabase.auth.getUser();
+
   await supabase.auth.signOut();
+
+  if (data.user) {
+    await journaliserCompte({
+      typeAction: TYPES_ACTION.utilisateurDeconnexion,
+      acteur: {
+        id: data.user.id,
+        email: data.user.email ?? "",
+        role: getSessionRoleFromUser(data.user) ?? "?",
+      },
+      pharmacyId: getPharmacyIdFromUser(data.user),
+    });
+  }
+
   redirect(LOGIN_PATH);
 }
 
@@ -199,6 +256,17 @@ export async function inviteAssistantAction(
       email: parsed.data.email,
       role: "ASSISTANT",
     },
+  });
+
+  // L'invitation crée un accès à des données personnelles : c'est le
+  // titulaire qui l'accorde, et le journal retient à qui.
+  await journaliserCompte({
+    typeAction: TYPES_ACTION.utilisateurInvite,
+    acteur: { id: owner.id, email: owner.email, role: owner.role },
+    pharmacyId: owner.pharmacyId,
+    // La cible est l'invité, pas celui qui invite.
+    cible: data.user.id,
+    apres: { nom: parsed.data.name, email: parsed.data.email, role: "assistant" },
   });
 
   revalidatePath("/parametres");

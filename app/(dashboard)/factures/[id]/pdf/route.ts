@@ -1,5 +1,7 @@
 import { getInvoice } from "@/lib/server/invoices";
 import { renderInvoicePdf } from "@/lib/invoices/pdf";
+import { ENTITES } from "@/lib/audit/event-log";
+import { journaliserTelechargement } from "@/lib/audit/export-document";
 
 /**
  * Streams the invoice as a real PDF download. getInvoice() is
@@ -15,6 +17,12 @@ export async function GET(
   if (!invoice) {
     return new Response("Facture introuvable", { status: 404 });
   }
+
+  await journaliserTelechargement({
+    entite: ENTITES.facture,
+    entiteId: invoice.id,
+    nom: invoice.number,
+  });
 
   const pdf = await renderInvoicePdf(invoice);
 

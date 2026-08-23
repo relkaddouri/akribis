@@ -31,6 +31,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
+import { formatSaleReference } from "@/lib/sales/returns";
 import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales";
 import { computeLoyaltyPoints, creditSaleMovement } from "@/lib/clients/account";
 import { addLoyaltyPoints, recordClientTransaction } from "@/lib/server/client-account";
@@ -336,6 +338,27 @@ export async function createSale(
         computeLoyaltyPoints(totalAmount, Number(pharmacy.loyaltyRate)),
       );
     }
+
+    // Journalisation en fin de transaction : la vente est écrite, ses
+    // mouvements de stock aussi, et la trace part avec eux ou pas du tout.
+    // Elle n'entre dans aucun calcul au-dessus — c'est un ajout à côté de
+    // la logique de vente, jamais dedans.
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.venteCreee,
+      entite: ENTITES.vente,
+      entiteId: sale.id,
+      pharmacyId: user.pharmacyId,
+      // Pas d'« avant » : la vente n'existait pas. L'« après » retient ce
+      // qui se relit des mois plus tard sans rouvrir la fiche.
+      apres: {
+        nom: formatSaleReference(sale.id),
+        montant: totalAmount,
+        paiement: parsed.paymentMethod,
+        client: client?.name ?? null,
+        lignes: items.length,
+      },
+    });
 
     return {
       id: sale.id,
