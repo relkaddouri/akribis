@@ -30,6 +30,8 @@ export type InvoiceDetail = InvoiceListItem & {
   pharmacyAddress: string | null;
   pharmacyPhone: string | null;
   pharmacyIce: string | null;
+  /** IF de l'officine, recopié à l'émission. C'est lui que porte le QR code. */
+  pharmacyIdentifiantFiscal: string | null;
   totalHt: number;
   totalTva: number;
   lines: Array<{
@@ -173,7 +175,13 @@ export async function createInvoiceFromSales(saleIds: string[]): Promise<CreateI
 
     const pharmacy = await tx.pharmacy.findUniqueOrThrow({
       where: { id: user.pharmacyId },
-      select: { name: true, address: true, phone: true, ice: true },
+      select: {
+        name: true,
+        address: true,
+        phone: true,
+        ice: true,
+        identifiantFiscal: true,
+      },
     });
 
     const issuedAt = new Date();
@@ -191,6 +199,7 @@ export async function createInvoiceFromSales(saleIds: string[]): Promise<CreateI
         pharmacyAddress: pharmacy.address,
         pharmacyPhone: pharmacy.phone,
         pharmacyIce: pharmacy.ice,
+        pharmacyIdentifiantFiscal: pharmacy.identifiantFiscal,
         clientId: sales[0]?.clientId ?? null,
         clientName: sales[0]?.client?.name ?? null,
         totalHt: new Prisma.Decimal(totals.totalHt),
@@ -331,6 +340,7 @@ export async function getInvoice(id: string): Promise<InvoiceDetail | null> {
     pharmacyAddress: invoice.pharmacyAddress,
     pharmacyPhone: invoice.pharmacyPhone,
     pharmacyIce: invoice.pharmacyIce,
+    pharmacyIdentifiantFiscal: invoice.pharmacyIdentifiantFiscal,
     totalHt: Number(invoice.totalHt),
     totalTva: Number(invoice.totalTva),
     totalTtc: Number(invoice.totalTtc),

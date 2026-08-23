@@ -51,6 +51,18 @@ export function PharmacyInfoForm({ pharmacy }: { pharmacy: PharmacySettings }) {
           <Input id="ice" name="ice" defaultValue={pharmacy.ice ?? ""} />
         </div>
         <div className="space-y-2">
+          <Label htmlFor="identifiantFiscal">Identifiant fiscal (IF)</Label>
+          <Input
+            id="identifiantFiscal"
+            name="identifiantFiscal"
+            defaultValue={pharmacy.identifiantFiscal ?? ""}
+          />
+          <p className="text-xs text-muted-foreground">
+            Le numéro sous lequel l&apos;officine est connue de la DGI — distinct de l&apos;ICE.
+            Il figure sur les factures et dans leur QR code.
+          </p>
+        </div>
+        <div className="space-y-2">
           <Label htmlFor="orderNumber">Numéro d&apos;ordre</Label>
           <Input id="orderNumber" name="orderNumber" defaultValue={pharmacy.orderNumber ?? ""} />
         </div>

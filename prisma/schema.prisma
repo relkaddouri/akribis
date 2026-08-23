@@ -11,28 +11,32 @@ datasource db {
 }
 
 model Pharmacy {
-  id              String   @id @default(uuid())
-  name            String
-  address         String?
-  phone           String?
+  id                String   @id @default(uuid())
+  name              String
+  address           String?
+  phone             String?
   /// ICE (Identifiant Commun de l'Entreprise) — Moroccan business registry number.
-  ice             String?
-  orderNumber     String?  @map("order_number")
+  ice               String?
+  /// IF — Identifiant Fiscal, le numéro sous lequel l'officine est connue de
+  /// la DGI. Distinct de l'ICE, qui est un identifiant d'entreprise : c'est
+  /// l'IF que porte le QR code des factures.
+  identifiantFiscal String?  @map("identifiant_fiscal")
+  orderNumber       String?  @map("order_number")
   /// INPE — Identifiant National du Praticien et de l'Établissement.
   /// Identifie l'officine auprès des organismes de tiers payant ; il figure
   /// sur les bordereaux qu'on leur adresse.
-  inpe            String?
+  inpe              String?
   /// N° de patente — la taxe professionnelle de l'officine. Figure sur les
   /// bordereaux adressés aux organismes, au même titre que l'ICE et l'INPE.
-  patente         String?
-  logoUrl         String?  @map("logo_url")
+  patente           String?
+  logoUrl           String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
-  receiptSettings Json?    @map("receipt_settings")
+  receiptSettings   Json?    @map("receipt_settings")
   /// Dirhams that earn one loyalty point. 1 means "1 DH = 1 point";
   /// raising it makes points scarcer. Never 0 — see lib/clients/account.ts.
-  loyaltyRate     Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  loyaltyRate       Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   users              User[]
   products           Product[]
@@ -739,10 +743,15 @@ model Invoice {
   status     InvoiceStatus @default(ISSUED)
   issuedAt   DateTime      @default(now()) @map("issued_at")
 
-  pharmacyName    String  @map("pharmacy_name")
-  pharmacyAddress String? @map("pharmacy_address")
-  pharmacyPhone   String? @map("pharmacy_phone")
-  pharmacyIce     String? @map("pharmacy_ice")
+  pharmacyName              String  @map("pharmacy_name")
+  pharmacyAddress           String? @map("pharmacy_address")
+  pharmacyPhone             String? @map("pharmacy_phone")
+  pharmacyIce               String? @map("pharmacy_ice")
+  /// Recopié à l'émission, comme les autres coordonnées : une facture doit
+  /// porter l'identifiant fiscal qui était celui de l'officine ce jour-là.
+  /// Le relire sur la pharmacie ferait changer le contenu du QR code d'une
+  /// facture déjà remise à un client.
+  pharmacyIdentifiantFiscal String? @map("pharmacy_identifiant_fiscal")
 
   /// Kept as a plain snapshot alongside the id: the same invoice format
   /// serves individuals, insurers and companies, so no client type here.

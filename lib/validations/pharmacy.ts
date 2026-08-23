@@ -17,6 +17,7 @@ export const pharmacyInfoSchema = z.object({
   address: optionalTrimmed(),
   phone: optionalTrimmed(),
   ice: optionalTrimmed(),
+  identifiantFiscal: optionalTrimmed(),
   orderNumber: optionalTrimmed(),
   inpe: optionalTrimmed(),
   patente: optionalTrimmed(),

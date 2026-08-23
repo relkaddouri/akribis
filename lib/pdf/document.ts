@@ -88,6 +88,47 @@ export function fit(ctx: PdfContext, value: string, maxWidth: number, size: numb
   return `${cut}...`;
 }
 
+/**
+ * Trace une matrice de QR code en rectangles pleins.
+ *
+ * Vectoriel, donc net à toute échelle et à l'impression — un PNG
+ * intermédiaire imposerait de choisir une résolution, et un QR pixellisé
+ * se lit mal une fois photocopié.
+ *
+ * `(x, y)` est le coin **inférieur gauche**, comme partout ailleurs dans
+ * pdf-lib. Les modules sont dessinés depuis le haut : la matrice est
+ * indexée en lignes descendantes, l'axe du PDF monte. Inverser les deux
+ * retournerait le symbole — et un QR retourné se lit encore, ce qui rend
+ * l'erreur d'autant plus facile à laisser passer.
+ */
+export function qrMatrix(
+  ctx: PdfContext,
+  matrice: boolean[][],
+  x: number,
+  y: number,
+  taille: number,
+) {
+  const modules = matrice.length;
+  if (modules === 0) return;
+  const cote = taille / modules;
+
+  for (let ligne = 0; ligne < modules; ligne += 1) {
+    for (let colonne = 0; colonne < modules; colonne += 1) {
+      if (!matrice[ligne]![colonne]) continue;
+      ctx.page.drawRectangle({
+        x: x + colonne * cote,
+        y: y + taille - (ligne + 1) * cote,
+        // Un poil plus grand que le pas : sans ce recouvrement, les
+        // arrondis du moteur de rendu laissent des cheveux blancs entre
+        // modules voisins, que les lecteurs prennent pour des séparations.
+        width: cote + 0.2,
+        height: cote + 0.2,
+        color: INK,
+      });
+    }
+  }
+}
+
 /** Full-width hairline across the printable area. */
 export function rule(ctx: PdfContext, y: number) {
   ctx.page.drawLine({
