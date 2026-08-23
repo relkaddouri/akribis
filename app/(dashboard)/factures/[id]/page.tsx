@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { Download, FileText } from "lucide-react";
 import { getInvoice } from "@/lib/server/invoices";
 import { formatMad, summariseTvaByRate } from "@/lib/invoices/totals";
@@ -43,19 +42,16 @@ export default async function FactureDetailPage({
       <DashboardHeader
         title={invoice.number}
         icon={<FileText />}
+        backHref="/factures"
+        backLabel="Factures"
         actions={
-          <div className="flex gap-sp-sm">
-            <Button variant="outline" asChild>
-              <Link href="/factures">Retour</Link>
-            </Button>
-            <Button asChild>
-              {/* Plain anchor, not <Link>: this is a file download, not a
-                  client-side navigation. */}
-              <a href={`/factures/${invoice.id}/pdf`}>
-                <Download /> Télécharger le PDF
-              </a>
-            </Button>
-          </div>
+          <Button asChild>
+            {/* Plain anchor, not <Link>: this is a file download, not a
+                client-side navigation. */}
+            <a href={`/factures/${invoice.id}/pdf`}>
+              <Download /> Télécharger le PDF
+            </a>
+          </Button>
         }
       />
 
@@ -74,6 +70,13 @@ export default async function FactureDetailPage({
               )}
               {invoice.pharmacyIce && (
                 <p className="text-muted-foreground">ICE : {invoice.pharmacyIce}</p>
+              )}
+              {/* L'IF figure sur le PDF et dans son QR code : l'omettre ici
+                  ferait diverger l'écran du document imprimé. */}
+              {invoice.pharmacyIdentifiantFiscal && (
+                <p className="text-muted-foreground">
+                  IF : {invoice.pharmacyIdentifiantFiscal}
+                </p>
               )}
             </div>
             <div className="space-y-sp-xs text-right text-sm">

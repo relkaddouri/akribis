@@ -1,11 +1,13 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { InvoiceDetail } from "@/lib/server/invoices";
 import { formatMad, summariseTvaByRate } from "@/lib/invoices/totals";
+import { chargeUtileQr, matriceQr } from "@/lib/invoices/qr-code";
 import {
   A4,
   fit,
   MARGIN,
   MUTED,
+  qrMatrix,
   rule,
   RULE,
   text,
@@ -18,6 +20,29 @@ import {
  * lib/pdf/document.ts, shared with the purchase order so both documents
  * keep the same typography and margins.
  */
+
+/**
+ * Côté du QR code, en points PDF. 120 pt ≈ 4,2 cm.
+ *
+ * Dimensionné par le bas : la charge utile lisible tient en 33 modules,
+ * et il en faut 1,2 mm chacun pour qu'un téléphone tenu de travers ou une
+ * photocopie s'en sortent. 33 × 1,2 mm ≈ 112 pt, arrondi à 120.
+ *
+ * C'est la taille du module, pas celle du symbole, qui décide de la
+ * lecture — d'où le seuil vérifié par tests/invoices/qr-code.test.ts,
+ * qui échouera si l'un des deux facteurs se dégrade.
+ */
+const COTE_QR = 120;
+
+/**
+ * Hauteur réservée en bas de page pour le bloc des totaux et le QR code.
+ *
+ * C'est ce que la boucle des lignes garde libre avant de passer à la page
+ * suivante. Sans la part du QR, un tableau qui s'arrête juste au-dessus
+ * de la limite laissait le symbole se dessiner par-dessus les totaux —
+ * illisible, et sur la seule zone de la facture qui doit l'être.
+ */
+const RESERVE_BAS_DE_PAGE = 140 + COTE_QR + 24;
 
 export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -41,6 +66,7 @@ export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Arr
     invoice.pharmacyAddress,
     invoice.pharmacyPhone,
     invoice.pharmacyIce ? `ICE : ${invoice.pharmacyIce}` : null,
+    invoice.pharmacyIdentifiantFiscal ? `IF : ${invoice.pharmacyIdentifiantFiscal}` : null,
   ]) {
     if (!line) continue;
     text(ctx, line, MARGIN, y, { size: 9, color: MUTED });
@@ -87,7 +113,7 @@ export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Arr
 
   for (const line of invoice.lines) {
     // Paginate before drawing, so a line is never split across pages.
-    if (y < MARGIN + 140) {
+    if (y < MARGIN + RESERVE_BAS_DE_PAGE) {
       page = doc.addPage([A4.width, A4.height]);
       ctx = { page, font, bold };
       y = A4.height - MARGIN;
@@ -146,6 +172,26 @@ export async function renderInvoicePdf(invoice: InvoiceDetail): Promise<Uint8Arr
   y -= 18;
   textRight(ctx, "Total TTC", labelRight, y, { size: 12, bold: true });
   textRight(ctx, formatMad(invoice.totalTtc), right, y, { size: 12, bold: true });
+
+  // ── QR code, en bas à droite de la dernière page ──
+  //
+  // Position fixe, et non à la suite du flux : le bas de page est le seul
+  // endroit où le symbole se trouve toujours au même endroit quelle que
+  // soit la longueur du tableau. C'est ce qui permet de le scanner sans
+  // chercher, et ce que `RESERVE_BAS_DE_PAGE` garde libre.
+  const matrice = matriceQr(
+    chargeUtileQr({
+      identifiantFiscal: invoice.pharmacyIdentifiantFiscal,
+      numero: invoice.number,
+      dateEmission: invoice.issuedAt,
+      totalTtc: invoice.totalTtc,
+    }),
+  );
+  qrMatrix(ctx, matrice, right - COTE_QR, MARGIN, COTE_QR);
+  textRight(ctx, "Facture électronique", right, MARGIN + COTE_QR + 6, {
+    size: 8,
+    color: MUTED,
+  });
 
   return doc.save();
 }

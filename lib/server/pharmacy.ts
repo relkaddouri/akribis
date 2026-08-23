@@ -27,6 +27,8 @@ export type PharmacySettings = {
   address: string | null;
   phone: string | null;
   ice: string | null;
+  /** IF — l'identifiant fiscal DGI. Distinct de l'ICE ; porté par le QR des factures. */
+  identifiantFiscal: string | null;
   orderNumber: string | null;
   inpe: string | null;
   patente: string | null;
@@ -104,6 +106,7 @@ export async function getPharmacySettings(): Promise<PharmacySettings> {
     address: pharmacy.address,
     phone: pharmacy.phone,
     ice: pharmacy.ice,
+    identifiantFiscal: pharmacy.identifiantFiscal,
     orderNumber: pharmacy.orderNumber,
     inpe: pharmacy.inpe,
     patente: pharmacy.patente,
@@ -153,6 +156,7 @@ export async function updatePharmacyInfoAction(
     address: formData.get("address"),
     phone: formData.get("phone"),
     ice: formData.get("ice"),
+    identifiantFiscal: formData.get("identifiantFiscal"),
     orderNumber: formData.get("orderNumber"),
     inpe: formData.get("inpe"),
     patente: formData.get("patente"),

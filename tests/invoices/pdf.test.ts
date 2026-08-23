@@ -14,6 +14,7 @@ function invoice(overrides: Partial<InvoiceDetail> = {}): InvoiceDetail {
     pharmacyAddress: "12 avenue Hassan II, Casablanca",
     pharmacyPhone: "0522000000",
     pharmacyIce: "001234567000089",
+    pharmacyIdentifiantFiscal: "40912345",
     totalHt: 100,
     totalTva: 20,
     totalTtc: 120,
