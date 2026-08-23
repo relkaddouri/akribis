@@ -30,6 +30,11 @@ vi.mock("@/lib/db/client", () => {
     Object.entries(where).every(([cle, valeur]) => fiche[cle] === valeur);
 
   const clientApi = {
+    create: async ({ data }: { data: Record<string, unknown> }) => {
+      const cree = { ...fiche(), ...data, id: `cli-${state.fiches.length + 1}` };
+      state.fiches.push(cree);
+      return { ...cree };
+    },
     findFirst: async ({ where }: { where: Record<string, unknown> }) => {
       const trouvee = state.fiches.find((f) => correspond(f, where));
       // Une copie : renvoyer la référence vive ferait muter l'état
@@ -89,7 +94,7 @@ const TITULAIRE = {
 vi.mock("@/lib/auth/session", () => ({ requireUser: async () => TITULAIRE }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
-const { getClient, updateClient } = await import("@/lib/server/clients");
+const { addClient, getClient, updateClient } = await import("@/lib/server/clients");
 
 function fiche(surcharges: Record<string, unknown> = {}) {
   return {
@@ -182,6 +187,44 @@ describe("consultation d'une fiche client", () => {
   it("n'écrit rien pour la fiche d'une autre officine", async () => {
     state.fiches = [fiche({ id: "cli-2", pharmacyId: "autre-pharmacie" })];
     expect(await getClient("cli-2")).toBeNull();
+    expect(state.journal).toHaveLength(0);
+  });
+});
+
+describe("création d'une fiche client", () => {
+  it("laisse une entrée du bon type, sans état « avant »", async () => {
+    const cree = await addClient({ name: "Nouveau Client", phone: "0611223344" });
+
+    expect(state.journal).toHaveLength(1);
+    expect(derniere().typeAction).toBe(TYPES_ACTION.clientCree);
+    expect(derniere().typeAction).toBe("client.cree");
+    expect(derniere().entite).toBe("client");
+    expect(derniere().entiteId).toBe(cree.id);
+    // La fiche n'existait pas : un « avant » vide serait une invention.
+    expect(derniere().avant).toBeUndefined();
+    expect((derniere().apres as { nom: string }).nom).toBe("Nouveau Client");
+  });
+
+  it("identifie qui a créé, et pour quelle officine", async () => {
+    await addClient({ name: "Nouveau Client", phone: "" });
+    expect(derniere().acteurEmail).toBe("titulaire@akribis.test");
+    expect(derniere().pharmacyId).toBe("pharm-1");
+  });
+
+  it("écrit la trace dans la transaction de la création", async () => {
+    // L'ajout rapide se fait en pleine vente : une fiche créée sans son
+    // entrée serait un trou dans le journal au moment le plus courant.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync("lib/server/clients.ts", "utf8"),
+    );
+    const fonction = /export async function addClient[\s\S]*?\n\}/.exec(source)![0];
+    expect(fonction).toMatch(/\$transaction\(async \(tx\) => \{/);
+    expect(fonction).toMatch(/await journaliser\(tx, \{/);
+    expect(fonction).not.toMatch(/journaliser\(prisma/);
+  });
+
+  it("n'écrit rien quand le formulaire est refusé", async () => {
+    await expect(addClient({ name: "  " })).rejects.toThrow();
     expect(state.journal).toHaveLength(0);
   });
 });

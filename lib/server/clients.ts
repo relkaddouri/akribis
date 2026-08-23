@@ -203,12 +203,29 @@ export async function addClient(input: ClientFormInput): Promise<ClientRecord> {
   const user = await requireUser();
   const data = clientFormSchema.parse(input);
 
-  const client = await prisma.client.create({
-    data: {
+  // Création et trace dans la même transaction, comme pour la
+  // modification : une fiche créée sans son entrée serait un trou dans le
+  // journal, et un journal troué ne se distingue pas d'un journal faux.
+  const client = await prisma.$transaction(async (tx) => {
+    const cree = await tx.client.create({
+      data: {
+        pharmacyId: user.pharmacyId,
+        name: data.name,
+        phone: data.phone,
+      },
+    });
+
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.clientCree,
+      entite: ENTITES.client,
+      entiteId: cree.id,
       pharmacyId: user.pharmacyId,
-      name: data.name,
-      phone: data.phone,
-    },
+      // Pas d'« avant » : la fiche n'existait pas.
+      apres: instantaneClient(cree),
+    });
+
+    return cree;
   });
 
   revalidatePath("/dashboard/clients");

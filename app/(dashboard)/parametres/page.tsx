@@ -1,6 +1,15 @@
-import { Building2, CloudOff, ReceiptText, Settings, ShieldCheck, Users } from "lucide-react";
+import {
+  Building2,
+  CloudOff,
+  ReceiptText,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import { getPharmacySettings } from "@/lib/server/pharmacy";
 import { listOrganismes } from "@/lib/server/organismes";
+import { listEventLogPharmacie, optionsJournal } from "@/lib/server/audit";
 import { DashboardHeader } from "@/components/features/dashboard/dashboard-header";
 import { PharmacyInfoForm } from "@/components/features/settings/pharmacy-info-form";
 import { ReceiptSettingsForm } from "@/components/features/settings/receipt-settings-form";
@@ -9,6 +18,7 @@ import { InviteAssistantForm } from "@/components/features/auth/invite-assistant
 import { ConflictLogView } from "@/components/features/offline/conflict-log-view";
 import { SyncQueueMaintenance } from "@/components/features/offline/sync-queue-maintenance";
 import { ProductResync } from "@/components/features/offline/product-resync";
+import { JournalAuditSection } from "@/components/features/settings/journal-audit-section";
 import {
   Card,
   CardContent,
@@ -29,6 +39,7 @@ const SECTIONS: SectionParametres[] = [
   { value: "ticket", label: "Ticket de caisse", icon: <ReceiptText /> },
   { value: "tiers-payant", label: "Tiers payant", icon: <ShieldCheck /> },
   { value: "utilisateurs", label: "Utilisateurs", icon: <Users /> },
+  { value: "journal", label: "Journal d'audit", icon: <ScrollText /> },
   { value: "hors-ligne", label: "Hors ligne", icon: <CloudOff /> },
 ];
 
@@ -36,7 +47,12 @@ export default async function ParametresPage() {
   // Les deux façades appellent requireOwner(). /parametres est déjà réservé
   // au titulaire par le middleware ; chacune le revérifie pour son compte,
   // cette page rendant des actions privilégiées.
-  const [pharmacy, organismes] = await Promise.all([getPharmacySettings(), listOrganismes()]);
+  const [pharmacy, organismes, journal, optionsFiltres] = await Promise.all([
+    getPharmacySettings(),
+    listOrganismes(),
+    listEventLogPharmacie(),
+    optionsJournal(),
+  ]);
 
   return (
     <div className="space-y-sp-lg">
@@ -118,6 +134,28 @@ export default async function ParametresPage() {
               </CardContent>
             </Card>
 
+          </TabsContent>
+
+          {/* Dans les Paramètres et non dans la barre latérale : c'est un
+              registre qu'on vient consulter en cas de question, pas un
+              module de travail quotidien. */}
+          <TabsContent value="journal">
+            <Card>
+              <CardHeader>
+                <CardTitle>Journal d&apos;audit</CardTitle>
+                <CardDescription>
+                  Qui a fait quoi, et quand. Chaque entrée est conservée définitivement : la
+                  base refuse toute modification et toute suppression sur cette table.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <JournalAuditSection
+                  entreesInitiales={journal}
+                  acteurs={optionsFiltres.acteurs}
+                  actions={optionsFiltres.actions}
+                />
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Its own tab rather than tacked onto "Utilisateurs", where the
