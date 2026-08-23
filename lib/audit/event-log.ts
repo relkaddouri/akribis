@@ -33,8 +33,25 @@ export const TYPES_ACTION = {
    * d'aucune autre entité — savoir qui a lu la fiche fait partie de ce
    * qu'un contrôle CNDP demande.
    */
+  clientCree: "client.cree",
   clientConsultation: "client.consultation",
   clientModifie: "client.modifie",
+  /**
+   * Déclaré sans être branché : l'application ne supprime pas de client.
+   * Une fiche porte des ventes, des mouvements de compte et des factures,
+   * qui perdraient leur contrepartie. Le vocabulaire est prêt pour le jour
+   * où une suppression — ou une anonymisation, plus probable au titre du
+   * droit à l'effacement — sera implémentée.
+   */
+  clientSupprime: "client.supprime",
+
+  /**
+   * L'export du journal est lui-même journalisé. Sortir des données
+   * personnelles de l'application est précisément le geste qu'un contrôle
+   * CNDP veut pouvoir retracer, et un journal qui ne noterait pas ses
+   * propres extractions aurait un angle mort à l'endroit le plus exposé.
+   */
+  journalExporte: "journal.exporte",
 } as const;
 
 export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
@@ -43,6 +60,8 @@ export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
 export const ENTITES = {
   catalogueProduit: "catalogue_produit",
   client: "client",
+  /** Le journal lui-même, pour tracer ses extractions. */
+  journal: "journal",
 } as const;
 
 export type Acteur = { id: string; email: string; role: string };
@@ -115,8 +134,11 @@ export const LIBELLES_ACTION: Record<string, string> = {
   [TYPES_ACTION.catalogueProduitDesactive]: "Fiche désactivée",
   [TYPES_ACTION.catalogueProduitReactive]: "Fiche réactivée",
   [TYPES_ACTION.catalogueProduitDrapeau]: "Statut modifié",
+  [TYPES_ACTION.clientCree]: "Fiche client créée",
   [TYPES_ACTION.clientConsultation]: "Fiche client consultée",
   [TYPES_ACTION.clientModifie]: "Fiche client modifiée",
+  [TYPES_ACTION.clientSupprime]: "Fiche client supprimée",
+  [TYPES_ACTION.journalExporte]: "Journal exporté",
 };
 
 export function libelleAction(typeAction: string): string {
