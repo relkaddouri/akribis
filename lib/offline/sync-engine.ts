@@ -28,6 +28,7 @@ import { listConflicts } from "@/lib/offline/conflict-log";
 import { logConflict } from "@/lib/offline/conflict-log";
 import * as remoteProducts from "@/lib/server/products";
 import * as remoteSales from "@/lib/server/sales";
+import * as remoteCaisse from "@/lib/server/caisse";
 import * as remoteOrders from "@/lib/server/orders";
 import * as remoteInventory from "@/lib/server/inventory";
 import type { ProductFormInput } from "@/lib/validations/products";
@@ -87,6 +88,7 @@ function toLocalProduct(product: ProductRecord) {
 
 /** What a queue item is about, for the conflict log. */
 const ENTITY_TYPE_BY_OPERATION: Record<SyncQueueItem["type"], ConflictLogItem["entityType"]> = {
+  ouvrirCaisse: "caisse",
   createProduct: "product",
   updateProduct: "product",
   createSale: "sale",
@@ -185,9 +187,54 @@ async function syncItem(item: SyncQueueItem): Promise<void> {
         await markSynced(item.id);
         return;
       }
+      case "ouvrirCaisse": {
+        const payload = item.payload as {
+          id: string;
+          fondCaisseInitial: number;
+          dateOuverture: string;
+        };
+        const resultat = await remoteCaisse.ouvrirCaisse(payload.fondCaisseInitial, {
+          id: payload.id,
+          dateOuverture: new Date(payload.dateOuverture),
+        });
+
+        if (!resultat.ok) {
+          // Le serveur refuse sur le fond — une session déjà ouverte
+          // ailleurs, le plus souvent depuis un autre poste. Réessayer
+          // échouerait identiquement ; on note le motif et on passe.
+          await logConflict({
+            entityType: "caisse",
+            entityId: item.entityId,
+            queueItemId: item.id,
+            clientTimestamp: item.clientTimestamp,
+            resolution: "sync_rejected",
+            detail: `Ouverture de caisse refusée : ${resultat.error}`,
+          });
+          await markRejected(item.id, resultat.error);
+          return;
+        }
+
+        // La session locale porte désormais l'identifiant du serveur —
+        // c'est le même, fabriqué ici. Marquée synchronisée pour que le
+        // comptoir cesse de l'annoncer en attente.
+        await getDb().caisseSessions.update(payload.id, { syncStatus: "synced" });
+        await markSynced(item.id);
+        return;
+      }
       case "createSale": {
-        const payload = item.payload as { id: string; input: CreateSaleInput };
-        const receipt = await remoteSales.createSale(payload.input, { id: payload.id });
+        const payload = item.payload as {
+          id: string;
+          input: CreateSaleInput;
+          /** Absent des ventes mises en file avant le module Caisse. */
+          occurredAt?: string | Date;
+        };
+        const receipt = await remoteSales.createSale(payload.input, {
+          id: payload.id,
+          // Repli sur l'horodatage de la file : il vaut la même chose, et
+          // une vente mise en file par une version antérieure n'en a pas
+          // dans sa charge utile.
+          occurredAt: new Date(payload.occurredAt ?? item.clientTimestamp),
+        });
 
         // The sale stands at the price on the customer's ticket; a
         // catalogue that has moved since is only worth a note. Logged

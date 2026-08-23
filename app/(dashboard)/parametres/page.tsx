@@ -1,6 +1,7 @@
 import {
   Building2,
   CloudOff,
+  Landmark,
   ReceiptText,
   ScrollText,
   Settings,
@@ -19,6 +20,7 @@ import { ConflictLogView } from "@/components/features/offline/conflict-log-view
 import { SyncQueueMaintenance } from "@/components/features/offline/sync-queue-maintenance";
 import { ProductResync } from "@/components/features/offline/product-resync";
 import { JournalAuditSection } from "@/components/features/settings/journal-audit-section";
+import { ClotureCaisseSection } from "@/components/features/settings/cloture-caisse-section";
 import {
   Card,
   CardContent,
@@ -38,6 +40,7 @@ const SECTIONS: SectionParametres[] = [
   { value: "informations", label: "Informations", icon: <Building2 /> },
   { value: "ticket", label: "Ticket de caisse", icon: <ReceiptText /> },
   { value: "tiers-payant", label: "Tiers payant", icon: <ShieldCheck /> },
+  { value: "caisse", label: "Caisse", icon: <Landmark /> },
   { value: "utilisateurs", label: "Utilisateurs", icon: <Users /> },
   { value: "journal", label: "Journal d'audit", icon: <ScrollText /> },
   { value: "hors-ligne", label: "Hors ligne", icon: <CloudOff /> },
@@ -116,6 +119,23 @@ export default async function ParametresPage() {
               </CardHeader>
               <CardContent>
                 <OrganismesSection organismes={organismes} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Sa propre section, et non un encart sous « Utilisateurs » :
+              c'est un réglage de caisse, et c'est dans « Caisse » qu'on va
+              le chercher — l'avoir rangé ailleurs l'a rendu introuvable. */}
+          <TabsContent value="caisse">
+            <Card>
+              <CardHeader>
+                <CardTitle>Clôture de caisse</CardTitle>
+                <CardDescription>
+                  Qui peut arrêter la journée comptable et générer le Journal Z.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ClotureCaisseSection autorisee={pharmacy.clotureAssistantAutorisee} />
               </CardContent>
             </Card>
           </TabsContent>

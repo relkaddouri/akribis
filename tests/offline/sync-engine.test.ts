@@ -169,7 +169,11 @@ describe("offline sale during a connection loss", () => {
         // server reprice the sale from the catalogue at sync time.
         items: [{ productId: "p1", quantity: 2, unitPrice: 10 }],
       }),
-      { id: receipt.id },
+      // `occurredAt` accompagne désormais l'identifiant : c'est par lui
+      // que le serveur reconnaît une vente rejouée après la clôture de sa
+      // journée, plutôt que de la compter comme une vente du jour où la
+      // synchronisation a fini par passer.
+      { id: receipt.id, occurredAt: expect.any(Date) },
     );
 
     const [queued] = await db.syncQueue.toArray();
@@ -566,7 +570,7 @@ describe("the price on the ticket is the price that counts", () => {
 
     const [, options] = remote.createSale.mock.calls[0]!;
     const [sent] = remote.createSale.mock.calls[0]!;
-    expect(options).toEqual({ id: receipt.id });
+    expect(options).toEqual({ id: receipt.id, occurredAt: expect.any(Date) });
     // 10, the figure the customer walked out with.
     expect(sent.items).toEqual([{ productId: "p1", quantity: 2, unitPrice: 10 }]);
   });

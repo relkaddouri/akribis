@@ -82,6 +82,17 @@ export const TYPES_ACTION = {
    * qu'on filtre sur « qui a exporté quoi ».
    */
   documentExporte: "document.exporte",
+
+  caisseOuverte: "caisse.ouverte",
+  caisseCloturee: "caisse.cloturee",
+  /**
+   * Tentative de clôture par un assistant avec un PIN refusé.
+   *
+   * Journalisée alors que rien ne s'est produit, et c'est le point : le
+   * PIN ne bloque pas après N essais, la trace est donc la seule chose
+   * qui permette au titulaire de voir qu'on a essayé.
+   */
+  caissePinRefuse: "caisse.pin_refuse",
 } as const;
 
 export type TypeAction = (typeof TYPES_ACTION)[keyof typeof TYPES_ACTION];
@@ -99,6 +110,7 @@ export const ENTITES = {
   bordereau: "bordereau",
   bonCommande: "bon_commande",
   bonLivraison: "bon_livraison",
+  caisseSession: "caisse_session",
 } as const;
 
 export type Acteur = { id: string; email: string; role: string };
@@ -186,6 +198,9 @@ export const LIBELLES_ACTION: Record<string, string> = {
   [TYPES_ACTION.utilisateurInvite]: "Assistant invité",
   [TYPES_ACTION.utilisateurRoleModifie]: "Rôle modifié",
   [TYPES_ACTION.documentExporte]: "Document exporté",
+  [TYPES_ACTION.caisseOuverte]: "Caisse ouverte",
+  [TYPES_ACTION.caisseCloturee]: "Caisse clôturée (Z)",
+  [TYPES_ACTION.caissePinRefuse]: "Code PIN de clôture refusé",
 };
 
 export function libelleAction(typeAction: string): string {

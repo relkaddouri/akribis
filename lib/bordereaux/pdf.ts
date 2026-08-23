@@ -1,10 +1,12 @@
-import { PDFDocument, StandardFonts, rgb, type PDFImage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import {
   A4,
   INK,
   MARGIN,
   MUTED,
+  chargerLogo,
   fit,
+  piedDePage,
   rule,
   text,
   textRight,
@@ -22,8 +24,6 @@ import type { ReceiptBranding } from "@/lib/server/pharmacy";
  * mêmes marges, mêmes filets, mêmes tailles. Un organisme qui reçoit
  * plusieurs documents de la même officine doit les reconnaître.
  */
-
-const PIED = "Powered by Akribis Pharma";
 
 /**
  * Les colonnes du tableau, en bandes {gauche, droite} plutôt qu'en simples
@@ -56,47 +56,6 @@ function dirham(valeur: number): string {
 
 function jour(date: Date): string {
   return new Date(date).toLocaleDateString("fr-FR");
-}
-
-/**
- * Le logo, quand il y en a un et qu'il est lisible.
- *
- * `null` à la moindre difficulté — URL injoignable, format WebP que
- * pdf-lib ne sait pas embarquer, octets corrompus. Un bordereau sans logo
- * reste un bordereau valable ; un bordereau qui n'a pas pu être généré
- * n'est rien du tout, et c'est de l'argent qu'on ne réclame pas.
- */
-async function chargerLogo(doc: PDFDocument, url: string | null): Promise<PDFImage | null> {
-  if (!url) return null;
-  try {
-    const reponse = await fetch(url);
-    if (!reponse.ok) return null;
-    const octets = new Uint8Array(await reponse.arrayBuffer());
-    // Signature plutôt qu'extension : l'URL porte un paramètre de cache
-    // (`?v=...`) et l'extension y ment aussi souvent qu'elle dit vrai.
-    //
-    // Aucun test ne distingue cette vérification de son absence, et c'est
-    // normal : le `catch` ci-dessous rattrape de toute façon un format
-    // refusé, donc le document sort identique dans les deux cas. Elle est
-    // là pour la lisibilité — ne pas piloter le flux normal par une
-    // exception — pas pour changer le résultat.
-    const estPng = octets[0] === 0x89 && octets[1] === 0x50;
-    const estJpg = octets[0] === 0xff && octets[1] === 0xd8;
-    if (estPng) return await doc.embedPng(octets);
-    if (estJpg) return await doc.embedJpg(octets);
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function pied(ctx: PdfContext, numeroPage: number, total: number) {
-  const y = MARGIN - 18;
-  text(ctx, PIED, MARGIN, y, { size: 8, color: MUTED });
-  textRight(ctx, `Page ${numeroPage} / ${total}`, A4.width - MARGIN, y, {
-    size: 8,
-    color: MUTED,
-  });
 }
 
 function enteteTableau(ctx: PdfContext, y: number) {
@@ -277,7 +236,7 @@ export async function renderBordereauPdf(
     text(ctx, titre, x + 8, y - 14, { size: 8, color: MUTED });
   }
 
-  pages.forEach((page, index) => pied(page, index + 1, pages.length));
+  pages.forEach((page, index) => piedDePage(page, index + 1, pages.length));
 
   return doc.save();
 }

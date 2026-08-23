@@ -103,6 +103,11 @@ export async function createSale(input: OfflineCreateSaleInput): Promise<Receipt
     // at the top of lib/server/sales.ts.
     payload: {
       id,
+      // Quand la vente a réellement eu lieu. Le serveur s'en sert pour
+      // reconnaître une vente rejouée après la clôture de sa journée et
+      // la marquer comme rattrapage, plutôt que de la compter comme une
+      // vente du jour où la synchronisation a fini par passer.
+      occurredAt: clientTimestamp,
       input: {
         ...parsed,
         items: items.map((line) => ({

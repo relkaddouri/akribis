@@ -1,67 +1,66 @@
-import qrcode from "qrcode-generator";
+import { createHash } from "node:crypto";
+import { nettoyerAlphanumerique, SEPARATEUR_QR } from "@/lib/pdf/qr-code";
 
 /**
- * Le QR code apposé sur chaque facture.
+ * Ce que porte le QR code d'une facture.
  *
  * ## Ce que ce module encode, et ce qu'il ne prétend pas être
  *
- * La DGI marocaine déploie la facturation électronique, mais je n'ai pas
- * de spécification vérifiable du format de QR qu'elle impose — rien
- * d'équivalent au TLV base64 publié par ZATCA en Arabie saoudite. Ce
- * fichier n'invente donc pas de structure « officielle » : il encode les
- * quatre données que porte toute facture — identifiant fiscal de
- * l'émetteur, numéro, date, total TTC — dans un format lisible et
- * auto-descriptif.
+ * Les champs suivent ce que la facturation électronique marocaine
+ * réclame : identifiant unique du document, identifiants fiscaux de
+ * l'émetteur, numéro, montants HT / TVA / TTC, et une empreinte
+ * d'intégrité. Je n'ai pas de spécification vérifiable du **format**
+ * exact imposé par la DGI — rien d'équivalent au TLV base64 publié par
+ * ZATCA en Arabie saoudite. La structure ci-dessous est donc lisible et
+ * auto-descriptive, pas « officielle ». Le jour où le format est connu,
+ * `chargeUtileQr` est la seule fonction à réécrire.
  *
- * Le jour où le format exact est connu, `chargeUtileQr` est la seule
- * fonction à réécrire. Le tracé PDF et le test de relecture ne bougent
- * pas : ils travaillent sur la chaîne, quelle qu'elle soit.
+ * ## Deux limites à connaître
  *
- * ## Pourquoi une matrice et non une image
+ * **L'empreinte n'est pas une signature.** SHA-256 détecte une altération
+ * accidentelle — une ligne recopiée de travers, un montant retouché par
+ * mégarde. Elle n'empêche rien : qui modifie la facture peut recalculer
+ * l'empreinte, puisque le calcul est public. Une vraie signature exige
+ * une clé privée détenue par l'officine, et un certificat pour la
+ * rattacher à elle. Tant que la DGI n'en délivre pas, ce champ vaut
+ * comme somme de contrôle, et il faut l'appeler ainsi.
  *
- * `qrcode-generator` rend la matrice de modules ; le PDF la dessine en
- * rectangles. Un PNG intermédiaire imposerait un encodeur de plus, une
- * résolution à choisir, et un QR pixellisé à l'impression — alors que le
- * PDF est un format vectoriel et qu'un carré noir est ce qu'il sait
- * dessiner de plus simple.
+ * **Les identifiants de l'acheteur manquent.** L'ICE et l'IF du client ne
+ * sont stockés nulle part dans l'application : la fiche client porte un
+ * CIN et une immatriculation d'organisme, pas d'identifiants
+ * d'entreprise. Les champs sont prévus ci-dessous et restent vides tant
+ * que le modèle ne les porte pas.
  */
 
 export type DonneesQrFacture = {
+  /** L'identifiant unique de la facture — l'UUID de la ligne en base. */
+  uuid: string;
   /** IF de l'officine, tel que recopié sur la facture. */
   identifiantFiscal: string | null;
+  /** ICE de l'officine, recopié de même. */
+  ice: string | null;
+  /** IF de l'acheteur. Absent du modèle aujourd'hui — voir l'en-tête. */
+  identifiantFiscalClient?: string | null;
+  /** ICE de l'acheteur. Absent du modèle aujourd'hui — voir l'en-tête. */
+  iceClient?: string | null;
   /** Numéro affiché, p. ex. « FACT-2026-0001 ». */
   numero: string;
   dateEmission: Date;
+  totalHt: number;
+  totalTva: number;
   totalTtc: number;
 };
 
-/**
- * Le séparateur entre champs.
- *
- * Un tiret entouré d'espaces, et non un caractère technique : la charge
- * se lit comme une phrase dans un lecteur de QR, ce qui est tout
- * l'intérêt de la forme retenue. Les trois caractères appartiennent au
- * jeu alphanumérique, condition pour rester dans le mode dense.
- */
-const SEPARATEUR = " - ";
-
-/**
- * Le jeu alphanumérique du QR : chiffres, majuscules, espace et
- * `$ % * + - . / :`. Rien d'autre.
- */
-const ALPHANUMERIQUE = /^[0-9A-Z $%*+\-./:]*$/;
+/** Longueur de l'empreinte retenue, en caractères hexadécimaux. */
+const LONGUEUR_EMPREINTE = 16;
 
 /**
  * La date au format français, en heure locale.
  *
- * Locale, et calculée à la main : `toISOString()` convertit en UTC, et
- * une facture émise à Casablanca le 1er mars à 00 h 30 y devient le
- * 29 février. Le QR porterait alors une date contredisant celle imprimée
+ * Locale, et calculée à la main : `toISOString()` convertit en UTC, et une
+ * facture émise à Casablanca le 1er mars à 00 h 30 y devient le 29
+ * février. Le QR porterait alors une date contredisant celle imprimée
  * juste au-dessus de lui.
- *
- * `toLocaleDateString` est écarté pour une autre raison : son résultat
- * dépend de l'ICU du moteur, et une locale absente rendrait « 8/22/2026 »
- * sur une facture marocaine.
  */
 function dateFr(date: Date): string {
   const mois = String(date.getMonth() + 1).padStart(2, "0");
@@ -69,96 +68,74 @@ function dateFr(date: Date): string {
   return `${jour}/${mois}/${date.getFullYear()}`;
 }
 
+/** Les champs, dans l'ordre, avant l'ajout de l'empreinte. */
+function champs(donnees: DonneesQrFacture): string[] {
+  const emetteur = [
+    donnees.identifiantFiscal ? `IF:${nettoyerAlphanumerique(donnees.identifiantFiscal)}` : null,
+    donnees.ice ? `ICE:${nettoyerAlphanumerique(donnees.ice)}` : null,
+  ].filter((valeur): valeur is string => valeur !== null);
+
+  // Vides tant que la fiche client ne porte pas ces identifiants. Le champ
+  // n'est pas émis du tout plutôt qu'émis vide : « IFC: » suivi de rien se
+  // lirait comme une donnée manquante sur cette facture-là, alors qu'elle
+  // manque partout.
+  const acheteur = [
+    donnees.identifiantFiscalClient
+      ? `IFC:${nettoyerAlphanumerique(donnees.identifiantFiscalClient)}`
+      : null,
+    donnees.iceClient ? `ICEC:${nettoyerAlphanumerique(donnees.iceClient)}` : null,
+  ].filter((valeur): valeur is string => valeur !== null);
+
+  return [
+    // Sans tirets : trente-deux caractères au lieu de trente-six, pour la
+    // même information. Sur une charge de cette longueur, quatre
+    // caractères pèsent sur la version du symbole.
+    `UUID:${nettoyerAlphanumerique(donnees.uuid.replace(/-/g, ""))}`,
+    ...emetteur,
+    ...acheteur,
+    `FACT:${nettoyerAlphanumerique(donnees.numero)}`,
+    dateFr(donnees.dateEmission),
+    `HT:${donnees.totalHt.toFixed(2)}`,
+    `TVA:${donnees.totalTva.toFixed(2)}`,
+    `TTC:${donnees.totalTtc.toFixed(2)}`,
+  ];
+}
+
+/**
+ * L'empreinte SHA-256 des champs, tronquée.
+ *
+ * Seize caractères hexadécimaux, soit 64 bits. Assez pour qu'une
+ * altération accidentelle ne passe pas — la probabilité qu'un montant
+ * retouché retombe sur la même empreinte est de l'ordre de un sur dix-huit
+ * milliards de milliards. Les 64 caractères complets coûteraient deux
+ * versions de symbole, donc un centimètre de plus sur le papier, pour une
+ * garantie que personne ici n'exploite.
+ *
+ * Exportée pour que le vérificateur puisse recalculer la même chose.
+ */
+export function empreinteFacture(donnees: DonneesQrFacture): string {
+  return createHash("sha256")
+    .update(champs(donnees).join("|"))
+    .digest("hex")
+    .toUpperCase()
+    .slice(0, LONGUEUR_EMPREINTE);
+}
+
 /**
  * La chaîne encodée dans le QR.
  *
- * Champs étiquetés en français, dans un ordre fixe :
+ *     UUID:3F2A... - IF:2378... - ICE:0012... - FACT:FACT-2026-0004 -
+ *     23/08/2026 - HT:84.40 - TVA:1.26 - TTC:85.66 - H:A1B2C3D4E5F60718
  *
- *     FACTURE FACT-2026-0003 - 22/08/2026 - TOTAL TTC 52.40 MAD - IF 237878237823
+ * Écrite pour être **lue** autant que relue par une machine : les
+ * étiquettes rendent la position des champs indifférente, et un scan rend
+ * quelque chose d'intelligible plutôt qu'une suite de nombres.
  *
- * Écrite pour être **lue**, après avoir constaté qu'un scan ne rend rien
- * d'exploitable sur une suite de champs techniques : l'appareil photo
- * d'iPhone refusait même de l'afficher, faute d'y reconnaître une action.
- * Les étiquettes rendent aussi la position des champs indifférente, ce
- * qui vaut mieux qu'un découpage par index.
- *
- * Trois contraintes de forme, toutes imposées par le jeu alphanumérique
- * du QR — en sortir coûterait 15 % de taille de module :
- *
- * - **majuscules**, les minuscules n'en font pas partie ;
- * - **point décimal** et non virgule, absente du jeu ; le montant
- *   imprimé sur la facture, lui, reste formaté en français ;
- * - **pas d'accent**, d'où « FACTURE » et non « Facture émise le ».
- *
- * L'IF absent — facture émise avant que l'officine ne le renseigne — fait
- * disparaître son segment. Un « IF » suivi de rien se lirait comme une
- * anomalie de la facture plutôt que comme une donnée non saisie.
+ * Trois contraintes de forme, toutes imposées par le jeu alphanumérique du
+ * QR — en sortir ferait basculer le symbole en mode octet et coûterait
+ * 15 % de taille de module : **majuscules**, **point décimal**, **pas
+ * d'accent**.
  */
 export function chargeUtileQr(donnees: DonneesQrFacture): string {
-  const identifiantFiscal = nettoyer(donnees.identifiantFiscal ?? "");
-
-  return [
-    `FACTURE ${nettoyer(donnees.numero)}`,
-    dateFr(donnees.dateEmission),
-    `TOTAL TTC ${donnees.totalTtc.toFixed(2)} MAD`,
-    ...(identifiantFiscal ? [`IF ${identifiantFiscal}`] : []),
-  ].join(SEPARATEUR);
-}
-
-/**
- * Ramène une valeur saisie au jeu alphanumérique du QR.
- *
- * Deux rôles, et les deux comptent :
- *
- * - **Correction.** Un numéro contenant le séparateur casserait la
- *   relecture sans que rien ne le signale : le lecteur découperait au
- *   mauvais endroit et lirait le champ suivant de travers.
- * - **Densité.** Un seul caractère hors jeu — une minuscule, une espace
- *   insécable recopiée d'un tableur — suffit à faire basculer tout le
- *   symbole en mode octet, donc à réduire la taille des modules. La mise
- *   en majuscules n'est pas cosmétique : c'est ce qui garde le QR
- *   scannable.
- */
-function nettoyer(valeur: string): string {
-  return (
-    valeur
-      .toUpperCase()
-      .replace(/[^0-9A-Z $%*+\-./:]/g, "")
-      // Le séparateur lui-même, s'il s'est glissé dans une valeur : sans
-      // cela un lecteur découperait au mauvais endroit. Le tiret seul
-      // reste, il fait partie des numéros de facture.
-      .replace(/ - /g, " ")
-      .trim()
-  );
-}
-
-/**
- * La matrice de modules, `true` pour un module noir.
- *
- * Correction d'erreur au niveau M (~15 %) : une facture se froisse, se
- * photocopie et se scanne de travers, mais elle n'est pas exposée comme
- * une étiquette de rayon — H doublerait la taille du symbole pour une
- * robustesse dont on n'a pas l'usage.
- */
-export function matriceQr(charge: string): boolean[][] {
-  const qr = qrcode(0, "M");
-  /*
-   * Mode alphanumérique quand c'est possible : 5,5 bits par caractère au
-   * lieu de 8. Sur la charge d'une facture, cela fait 29 modules au lieu
-   * de 33 — des modules 15 % plus grands pour la même place sur le
-   * papier, et c'est la taille des modules qui décide de ce qu'un
-   * téléphone arrive à lire.
-   *
-   * Repli sur le mode octet plutôt qu'exception : `chargeUtileQr`
-   * n'écrit aujourd'hui que de l'alphanumérique, mais une charge
-   * réécrite pour un futur format DGI ne doit pas faire échouer la
-   * génération du PDF entier.
-   */
-  qr.addData(charge, ALPHANUMERIQUE.test(charge) ? "Alphanumeric" : "Byte");
-  qr.make();
-
-  const taille = qr.getModuleCount();
-  return Array.from({ length: taille }, (_, ligne) =>
-    Array.from({ length: taille }, (_, colonne) => qr.isDark(ligne, colonne)),
-  );
+  return [...champs(donnees), `H:${empreinteFacture(donnees)}`].join(SEPARATEUR_QR);
 }

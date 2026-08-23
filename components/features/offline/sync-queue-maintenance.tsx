@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const OPERATION_LABELS: Record<SyncOperationType, string> = {
+  ouvrirCaisse: "ouverture de caisse",
   createSale: "vente",
   updateProduct: "produit modifié",
   createProduct: "nouveau produit",

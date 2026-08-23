@@ -1,7 +1,19 @@
 import { Prisma } from "@/lib/db/generated/client";
 
 /** Document families with their own independent numbering. */
-export type SequenceScope = "order" | "delivery" | "supplier_credit";
+/**
+ * Les familles de documents à numérotation propre.
+ *
+ * Le Journal Z fait exception : son NNN repart à 1 chaque matin, donc sa
+ * portée porte la date — `caisse_z:2026-08-22`. Une ligne de compteur par
+ * jour, ce qui coûte moins qu'une table dédiée pour la même garantie
+ * d'atomicité.
+ */
+export type SequenceScope =
+  | "order"
+  | "delivery"
+  | "supplier_credit"
+  | `caisse_z:${string}`;
 
 /**
  * Allocates the next number for (pharmacy, scope) in ONE statement.

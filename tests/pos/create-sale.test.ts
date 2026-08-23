@@ -70,6 +70,8 @@ const state = vi.hoisted(() => {
     accountMovements: [] as FakeAccountMovement[],
     loyaltyAwards: [] as { clientId: string; points: number }[],
     journal: [] as Record<string, unknown>[],
+    /** La session de caisse ouverte, ou `null` si la caisse n'est pas ouverte. */
+    sessionOuverte: null as { id: string; dateOuverture: Date } | null,
     nextSaleId: 1,
   };
 });
@@ -144,6 +146,9 @@ function makeTx() {
     },
     pharmacy: {
       findUniqueOrThrow: async () => ({ loyaltyRate: 1 }),
+    },
+    caisseSession: {
+      findFirst: async () => (state.sessionOuverte ? { ...state.sessionOuverte } : null),
     },
     // Ajouté avec la journalisation des ventes. Le journal est en ajout
     // seul, garanti par un déclencheur en base : le faux refuse donc les
@@ -263,6 +268,10 @@ beforeEach(() => {
   state.accountMovements = [];
   state.loyaltyAwards = [];
   state.journal = [];
+  // Caisse ouverte aujourd'hui par défaut : sans session, plus aucune
+  // vente ne passe, et les dizaines d'assertions de ce fichier portent
+  // sur des ventes qui doivent réussir.
+  state.sessionOuverte = { id: "sess-1", dateOuverture: new Date() };
   state.nextSaleId = 1;
 });
 
@@ -598,5 +607,110 @@ describe("journalisation d'une vente", () => {
 
     expect(state.journal).toHaveLength(0);
     expect(state.sales).toHaveLength(0);
+  });
+});
+
+/**
+ * La caisse commande la vente.
+ *
+ * Le contrôle vit dans `createSale`, pas seulement dans l'écran de
+ * blocage : le point de vente hors ligne rejoue ses ventes par cette même
+ * fonction, sans jamais passer par l'écran.
+ */
+describe("aucune vente sans session de caisse ouverte", () => {
+  it("refuse quand la caisse n'a pas été ouverte", async () => {
+    state.sessionOuverte = null;
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await expect(
+      createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] }),
+    ).rejects.toThrow("Caisse non ouverte");
+
+    expect(state.sales).toHaveLength(0);
+    // Le stock non plus n'a pas bougé : le refus est dans la transaction.
+    expect(state.products.find((p) => p.id === "p1")?.quantityInStock).toBe(10);
+  });
+
+  it("refuse aussi une vente par carte", async () => {
+    // Une vente par carte ne touche pas le tiroir, mais elle entre dans le
+    // Z : la laisser passer hors session la rendrait invisible de la
+    // journée comptable.
+    state.sessionOuverte = null;
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await expect(
+      createSale({ paymentMethod: "CARD", items: [{ productId: "p1", quantity: 1 }] }),
+    ).rejects.toThrow("Caisse non ouverte");
+  });
+
+  it("refuse quand la session d'un jour précédent n'a pas été clôturée", async () => {
+    // Pas de cumul sur plusieurs jours : chaque journée a son propre Z.
+    state.sessionOuverte = { id: "sess-hier", dateOuverture: new Date(2026, 7, 21, 9, 0) };
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await expect(
+      createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] }),
+    ).rejects.toThrow(/n'a pas été clôturée/);
+  });
+
+  it("rattache la vente à la session ouverte", async () => {
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await createSale({ paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] });
+
+    expect(state.sales[0]).toMatchObject({ caisseSessionId: "sess-1", rattrapageOffline: false });
+  });
+});
+
+describe("vente hors ligne synchronisée en retard", () => {
+  it("la rattache à la session courante, marquée rattrapage", async () => {
+    /*
+     * Le cas que la demande veut voir traité : la vente a eu lieu hier,
+     * la session d'hier est close, et sa synchronisation n'arrive
+     * qu'aujourd'hui. On ne rouvre jamais une session fermée — son Z est
+     * archivé et ses ventes sont figées en base. La vente rejoint donc la
+     * session du jour, marquée pour que le Z dise que ce montant n'est
+     * pas de sa journée.
+     */
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+    const hier = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const recu = await createSale(
+      { paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] },
+      { id: "vente-hors-ligne", occurredAt: hier },
+    );
+
+    // Ni rejetée ni perdue : enregistrée, et rattachée à aujourd'hui.
+    expect(recu.id).toBe("vente-hors-ligne");
+    expect(state.sales[0]).toMatchObject({
+      caisseSessionId: "sess-1",
+      rattrapageOffline: true,
+    });
+  });
+
+  it("signale le rattrapage dans le journal d'audit", async () => {
+    // C'est par là que le titulaire l'apprend : une vente comptée dans le
+    // Z du jour alors qu'elle date de la veille change ses totaux.
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await createSale(
+      { paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] },
+      { occurredAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    );
+
+    expect(state.journal.at(-1)!.apres).toMatchObject({ rattrapageOffline: true });
+  });
+
+  it("ne marque pas une vente hors ligne synchronisée le jour même", async () => {
+    // La coupure réseau d'une heure est le cas courant ; la traiter comme
+    // un rattrapage ferait clignoter un avertissement chaque jour.
+    seedProduct({ id: "p1", quantityInStock: 10, price: 12.5 });
+
+    await createSale(
+      { paymentMethod: "CASH", items: [{ productId: "p1", quantity: 1 }] },
+      { occurredAt: new Date() },
+    );
+
+    expect(state.sales[0]).toMatchObject({ rattrapageOffline: false });
   });
 });
