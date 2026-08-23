@@ -11,7 +11,7 @@ datasource db {
 }
 
 model Pharmacy {
-  id                String   @id @default(uuid())
+  id                String  @id @default(uuid())
   name              String
   address           String?
   phone             String?
@@ -20,23 +20,32 @@ model Pharmacy {
   /// IF — Identifiant Fiscal, le numéro sous lequel l'officine est connue de
   /// la DGI. Distinct de l'ICE, qui est un identifiant d'entreprise : c'est
   /// l'IF que porte le QR code des factures.
-  identifiantFiscal String?  @map("identifiant_fiscal")
-  orderNumber       String?  @map("order_number")
+  identifiantFiscal String? @map("identifiant_fiscal")
+
+  /// Le titulaire autorise-t-il un assistant à clôturer la caisse ?
+  /// Désactivé par défaut : la clôture arrête la journée comptable, et
+  /// c'est une responsabilité de titulaire tant qu'il n'en décide pas
+  /// autrement.
+  clotureAssistantAutorisee Boolean  @default(false) @map("cloture_assistant_autorisee")
+  /// Le PIN de clôture, haché avec scrypt — jamais en clair. Nul tant que
+  /// le titulaire n'en a pas défini.
+  cloturePinHash            String?  @map("cloture_pin_hash")
+  orderNumber               String?  @map("order_number")
   /// INPE — Identifiant National du Praticien et de l'Établissement.
   /// Identifie l'officine auprès des organismes de tiers payant ; il figure
   /// sur les bordereaux qu'on leur adresse.
-  inpe              String?
+  inpe                      String?
   /// N° de patente — la taxe professionnelle de l'officine. Figure sur les
   /// bordereaux adressés aux organismes, au même titre que l'ICE et l'INPE.
-  patente           String?
-  logoUrl           String?  @map("logo_url")
+  patente                   String?
+  logoUrl                   String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
-  receiptSettings   Json?    @map("receipt_settings")
+  receiptSettings           Json?    @map("receipt_settings")
   /// Dirhams that earn one loyalty point. 1 means "1 DH = 1 point";
   /// raising it makes points scarcer. Never 0 — see lib/clients/account.ts.
-  loyaltyRate       Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  loyaltyRate               Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
 
   users              User[]
   products           Product[]
@@ -56,9 +65,10 @@ model Pharmacy {
 
   inventorySessions InventorySession[]
 
-  pharmacyStock PharmacyStock[]
-  organismes    OrganismeTiersPayant[]
-  bordereaus    Bordereau[]
+  pharmacyStock  PharmacyStock[]
+  organismes     OrganismeTiersPayant[]
+  bordereaus     Bordereau[]
+  caisseSessions CaisseSession[]
 
   @@map("pharmacies")
 }
@@ -87,6 +97,8 @@ model User {
   saleReturns         SaleReturn[]
   publicationLectures PublicationLecture[]
   inventorySessions   InventorySession[]
+  caissesOuvertes     CaisseSession[]      @relation("CaisseOuvertePar")
+  caissesFermees      CaisseSession[]      @relation("CaisseFermeePar")
 
   @@index([pharmacyId])
   @@map("users")
@@ -161,6 +173,58 @@ model Product {
   @@index([pharmacyId])
   @@index([catalogueProduitId])
   @@map("products")
+}
+
+/// Une session de caisse : de l'ouverture du matin au Journal Z du soir.
+enum StatutCaisseSession {
+  OUVERTE  @map("ouverte")
+  CLOTUREE @map("cloturee")
+
+  @@map("statut_caisse_session")
+}
+
+model CaisseSession {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+
+  ouvertePar        String              @map("ouverte_par")
+  fondCaisseInitial Decimal             @default(0) @map("fond_caisse_initial") @db.Decimal(10, 2)
+  dateOuverture     DateTime            @default(now()) @map("date_ouverture")
+  statut            StatutCaisseSession @default(OUVERTE)
+
+  fermeePar     String?   @map("fermee_par")
+  dateFermeture DateTime? @map("date_fermeture")
+
+  /// Fond initial + espèces encaissées sur la session. Calculé à la
+  /// clôture et figé : le recalculer plus tard donnerait un autre chiffre
+  /// dès qu'une vente en retard est rattachée.
+  especesTheoriques Decimal? @map("especes_theoriques") @db.Decimal(10, 2)
+  /// Ce que le tiroir contenait vraiment, compté à l'aveugle.
+  especesReelles    Decimal? @map("especes_reelles") @db.Decimal(10, 2)
+  /// Réel moins théorique. Négatif = il manque de l'argent.
+  ecartCaisse       Decimal? @map("ecart_caisse") @db.Decimal(10, 2)
+
+  /// Z-AAAA-MM-JJ-NNN, attribué à la clôture seulement. Une session
+  /// ouverte n'a pas de numéro : il n'y a encore rien à archiver.
+  numeroZ String? @map("numero_z")
+
+  /// Clôture faite par un assistant au moyen du code PIN. Visible dans
+  /// l'historique : le titulaire doit toujours distinguer qui a vraiment
+  /// arrêté la caisse.
+  fermetureParPin Boolean @default(false) @map("fermeture_par_pin")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  ouvreur  User     @relation("CaisseOuvertePar", fields: [ouvertePar], references: [id], onDelete: Restrict)
+  fermeur  User?    @relation("CaisseFermeePar", fields: [fermeePar], references: [id], onDelete: SetNull)
+  ventes   Sale[]
+
+  @@unique([pharmacyId, numeroZ])
+  @@index([pharmacyId, statut])
+  @@index([pharmacyId, dateOuverture])
+  @@map("caisse_sessions")
 }
 
 enum StockMovementType {
@@ -363,12 +427,22 @@ model Sale {
 
   statutCreance StatutCreance @default(AUCUNE) @map("statut_creance")
 
+  /// La session de caisse à laquelle la vente est rattachée. Nulle pour
+  /// les ventes antérieures au module.
+  caisseSessionId   String? @map("caisse_session_id")
+  /// Vente hors ligne synchronisée après la clôture de sa journée. Elle
+  /// est rattachée à la session ouverte du moment, pas à la sienne : une
+  /// session close ne se rouvre jamais. Le drapeau dit que le Z où elle
+  /// figure n'est pas celui de sa date réelle.
+  rattrapageOffline Boolean @default(false) @map("rattrapage_offline")
+
   pharmacy           Pharmacy              @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   client             Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
   user               User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   items              SaleItem[]
   invoice            Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   insurer            OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
+  caisseSession      CaisseSession?        @relation(fields: [caisseSessionId], references: [id], onDelete: SetNull)
   bordereauLignes    BordereauVente[]
   returns            SaleReturn[]
   clientTransactions ClientTransaction[]
@@ -379,6 +453,7 @@ model Sale {
   @@index([invoiceId])
   /// Le filtre de la page Ventes : « quelles créances attendent un bordereau ».
   @@index([pharmacyId, statutCreance])
+  @@index([caisseSessionId])
   @@map("sales")
 }
 

@@ -37,6 +37,7 @@ const ROLE_LABELS: Record<string, string> = {
 export type HeaderSpace = "pharmacy" | "admin";
 
 const SYNC_ITEM_LABELS: Record<SyncOperationType, string> = {
+  ouvrirCaisse: "ouverture de caisse",
   createSale: "vente",
   updateProduct: "produit modifié",
   createProduct: "nouveau produit",

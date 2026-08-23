@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import jsQR from "jsqr";
 import { renderInvoicePdf } from "@/lib/invoices/pdf";
-import { chargeUtileQr, matriceQr } from "@/lib/invoices/qr-code";
+import {
+  chargeUtileQr,
+  empreinteFacture,
+  type DonneesQrFacture,
+} from "@/lib/invoices/qr-code";
+import { matriceQr, PART_LOGO } from "@/lib/pdf/qr-code";
 import { A4, MARGIN } from "@/lib/pdf/document";
 import type { InvoiceDetail } from "@/lib/server/invoices";
 
@@ -20,9 +27,24 @@ import type { InvoiceDetail } from "@/lib/server/invoices";
  * avec les données réelles de la facture.
  */
 
+/** Les données de QR d'une facture d'essai, complètes par défaut. */
+function donneesQr(surcharges: Partial<DonneesQrFacture> = {}): DonneesQrFacture {
+  return {
+    uuid: "3f2a9c41-7b6e-4d18-9e52-0a7c4b1d8e63",
+    identifiantFiscal: "40912345",
+    ice: "001234567000089",
+    numero: "FACT-2026-0042",
+    dateEmission: new Date(2026, 7, 22),
+    totalHt: 1041.67,
+    totalTva: 208.33,
+    totalTtc: 1250,
+    ...surcharges,
+  };
+}
+
 function facture(surcharges: Partial<InvoiceDetail> = {}): InvoiceDetail {
   return {
-    id: "inv-1",
+    id: "3f2a9c41-7b6e-4d18-9e52-0a7c4b1d8e63",
     number: "FACT-2026-0042",
     issuedAt: new Date("2026-08-22T10:00:00"),
     clientName: "Mutuelle CNOPS",
@@ -257,16 +279,32 @@ describe("le QR code dessiné sur la facture se relit", () => {
     const donnees = facture();
     const decode = decoder(matriceDepuisPdf(await renderInvoicePdf(donnees)).matrice);
 
-    expect(decode).toBe("FACTURE FACT-2026-0042 - 22/08/2026 - TOTAL TTC 1250.00 MAD - IF 40912345");
+    expect(decode).toBe("UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:40912345 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:1938563148516F09");
 
     // Et champ par champ, contre la facture elle-même plutôt que contre
     // une chaîne recopiée : c'est ce que la demande veut voir vérifié.
     const segments = decode!.split(" - ");
     expect(segments).toEqual([
-      `FACTURE ${donnees.number}`,
+      `UUID:${donnees.id.replace(/-/g, "").toUpperCase()}`,
+      `IF:${donnees.pharmacyIdentifiantFiscal}`,
+      `ICE:${donnees.pharmacyIce}`,
+      `FACT:${donnees.number}`,
       "22/08/2026",
-      `TOTAL TTC ${donnees.totalTtc.toFixed(2)} MAD`,
-      `IF ${donnees.pharmacyIdentifiantFiscal}`,
+      `HT:${donnees.totalHt.toFixed(2)}`,
+      `TVA:${donnees.totalTva.toFixed(2)}`,
+      `TTC:${donnees.totalTtc.toFixed(2)}`,
+      // L'empreinte se recalcule : c'est tout son intérêt, et la seule
+      // façon de vérifier qu'elle porte bien sur ces champs-là.
+      `H:${empreinteFacture({
+        uuid: donnees.id,
+        identifiantFiscal: donnees.pharmacyIdentifiantFiscal,
+        ice: donnees.pharmacyIce,
+        numero: donnees.number,
+        dateEmission: donnees.issuedAt,
+        totalHt: donnees.totalHt,
+        totalTva: donnees.totalTva,
+        totalTtc: donnees.totalTtc,
+      })}`,
     ]);
   });
 
@@ -281,7 +319,7 @@ describe("le QR code dessiné sur la facture se relit", () => {
       expect(
         decoderGeometrieReelle(pdf, pxParModule),
         `illisible à ${pxParModule} px par module`,
-      ).toBe("FACTURE FACT-2026-0042 - 22/08/2026 - TOTAL TTC 1250.00 MAD - IF 40912345");
+      ).toBe("UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:40912345 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:1938563148516F09");
     }
   });
 
@@ -300,16 +338,38 @@ describe("le QR code dessiné sur la facture se relit", () => {
     const donnees = facture();
     const { matrice } = matriceDepuisPdf(await renderInvoicePdf(donnees));
     const attendue = matriceQr(
-      chargeUtileQr({
-        identifiantFiscal: donnees.pharmacyIdentifiantFiscal,
-        numero: donnees.number,
-        dateEmission: donnees.issuedAt,
-        totalTtc: donnees.totalTtc,
-      }),
+      chargeUtileQr(
+        donneesQr({
+          identifiantFiscal: donnees.pharmacyIdentifiantFiscal,
+          numero: donnees.number,
+          dateEmission: donnees.issuedAt,
+          totalTtc: donnees.totalTtc,
+        }),
+      ),
+      // Même niveau de correction que le tracé, sans quoi la comparaison
+      // porterait sur deux symboles différents.
+      "Q",
     );
 
     expect(matrice.length).toBe(attendue.length);
-    expect(matrice).toEqual(attendue);
+
+    /*
+     * Comparaison hors du disque central : les modules qu'occupe l'icône
+     * ne sont pas dessinés du tout — les tracer puis les masquer les
+     * ferait réapparaître sur un lecteur qui ignore la superposition, ou
+     * après une conversion en niveaux de gris.
+     */
+    const centre = (attendue.length - 1) / 2;
+    const rayon = (attendue.length * PART_LOGO) / 2 + 0.5;
+    for (let ligne = 0; ligne < attendue.length; ligne += 1) {
+      for (let colonne = 0; colonne < attendue.length; colonne += 1) {
+        if (Math.hypot(ligne - centre, colonne - centre) <= rayon) continue;
+        expect(
+          matrice[ligne]![colonne],
+          `module (${ligne}, ${colonne}) mal placé`,
+        ).toBe(attendue[ligne]![colonne]);
+      }
+    }
   });
 
   it("suit la facture quand ses données changent", async () => {
@@ -322,6 +382,8 @@ describe("le QR code dessiné sur la facture se relit", () => {
             number: "FACT-2027-0001",
             pharmacyIdentifiantFiscal: "99887766",
             issuedAt: new Date("2027-01-05T09:00:00"),
+            totalHt: 72.83,
+            totalTva: 14.57,
             totalTtc: 87.4,
           }),
         ),
@@ -329,7 +391,7 @@ describe("le QR code dessiné sur la facture se relit", () => {
     );
 
     expect(decode).toBe(
-      "FACTURE FACT-2027-0001 - 05/01/2027 - TOTAL TTC 87.40 MAD - IF 99887766",
+      "UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:99887766 - ICE:001234567000089 - FACT:FACT-2027-0001 - 05/01/2027 - HT:72.83 - TVA:14.57 - TTC:87.40 - H:6876CD2D03F3994B",
     );
   });
 
@@ -350,10 +412,19 @@ describe("le QR code dessiné sur la facture se relit", () => {
     const { matrice, cadre } = matriceDepuisPdf(await renderInvoicePdf(facture()));
     const pasEnMm = (cadre.cote / matrice.length) * PT_EN_MM;
 
+    /*
+     * 0,9 mm, et non 1,2 comme dans une version antérieure de ce fichier.
+     * Le seuil de 1,2 venait d'un mauvais diagnostic : le QR « illisible »
+     * se décodait en fait très bien à 0,91 mm — l'appareil photo affichait
+     * « No usable data found », donc il avait lu la chaîne et refusait
+     * seulement d'en faire quelque chose. Le seuil suit maintenant ce
+     * qu'on a réellement observé, avec la marge de l'usure et de la
+     * photocopie.
+     */
     expect(
       pasEnMm,
       `module de ${pasEnMm.toFixed(2)} mm — trop petit pour un scan fiable`,
-    ).toBeGreaterThanOrEqual(1.2);
+    ).toBeGreaterThanOrEqual(0.9);
   });
 
   it("se pose en bas à droite de la page", async () => {
@@ -392,7 +463,7 @@ describe("le QR code dessiné sur la facture se relit", () => {
       const pdf = await renderInvoicePdf(facture({ lines: lignes }));
       const { matrice, cadre } = matriceDepuisPdf(pdf);
 
-      expect(decoder(matrice), `${nombre} ligne(s) : QR illisible`).toBe("FACTURE FACT-2026-0042 - 22/08/2026 - TOTAL TTC 1250.00 MAD - IF 40912345");
+      expect(decoder(matrice), `${nombre} ligne(s) : QR illisible`).toBe("UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:40912345 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:1938563148516F09");
 
       const dansLeCadre = ancragesTexte(pdf).filter(
         (point) =>
@@ -413,8 +484,13 @@ describe("le QR code dessiné sur la facture se relit", () => {
       matriceDepuisPdf(await renderInvoicePdf(facture({ pharmacyIdentifiantFiscal: null })))
         .matrice,
     );
-    expect(decode).toBe("FACTURE FACT-2026-0042 - 22/08/2026 - TOTAL TTC 1250.00 MAD");
-    expect(decode).not.toContain("IF");
+    expect(decode).toBe(
+      "UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:4F54421E7CCC10D3",
+    );
+    // Le segment disparaît entièrement plutôt que de rester vide : « IF: »
+    // suivi de rien se lirait comme une donnée manquante sur cette
+    // facture-là, alors qu'elle manque partout.
+    expect(decode).not.toContain("IF:");
   });
 });
 
@@ -427,17 +503,19 @@ describe("la charge utile", () => {
      * tout le symbole en mode octet et rétrécit les modules de 15 %,
      * sans que rien ne le signale.
      */
-    const charge = chargeUtileQr({
-      identifiantFiscal: "237878237823",
-      numero: "fact-2026-0001",
-      dateEmission: new Date(2026, 7, 17),
-      totalTtc: 1250,
-    });
+    const charge = chargeUtileQr(
+        donneesQr({
+          identifiantFiscal: "237878237823",
+          numero: "fact-2026-0001",
+          dateEmission: new Date(2026, 7, 17),
+          totalTtc: 1250,
+        }),
+      );
 
     expect(charge).toMatch(/^[0-9A-Z $%*+\-./:]*$/);
     // La mise en majuscules n'est pas cosmétique : c'est elle qui garde
     // un numéro saisi en minuscules dans le jeu dense.
-    expect(charge).toContain("FACTURE FACT-2026-0001");
+    expect(charge).toContain("FACT:FACT-2026-0001");
   });
 
 
@@ -447,12 +525,14 @@ describe("la charge utile", () => {
     // imprimée juste au-dessus de lui.
     const minuitPasse = new Date(2026, 2, 1, 0, 30);
     expect(
-      chargeUtileQr({
-        identifiantFiscal: "40912345",
-        numero: "FACT-2026-0001",
-        dateEmission: minuitPasse,
-        totalTtc: 10,
-      }),
+      chargeUtileQr(
+        donneesQr({
+          identifiantFiscal: "40912345",
+          numero: "FACT-2026-0001",
+          dateEmission: minuitPasse,
+          totalTtc: 10,
+        }),
+      ),
     ).toContain("01/03/2026");
   });
 
@@ -460,16 +540,17 @@ describe("la charge utile", () => {
     // Sinon le lecteur découperait au mauvais endroit et lirait tout ce
     // qui suit de travers, sans que rien ne le signale. Le tiret seul,
     // lui, doit survivre : les numéros de facture en contiennent.
-    const charge = chargeUtileQr({
-      identifiantFiscal: "409 - 12345",
-      numero: "FACT-2026-0001",
-      dateEmission: new Date(2026, 7, 22),
-      totalTtc: 10,
-    });
-    expect(charge).toBe(
-      "FACTURE FACT-2026-0001 - 22/08/2026 - TOTAL TTC 10.00 MAD - IF 409 12345",
+    const charge = chargeUtileQr(
+      donneesQr({
+        identifiantFiscal: "409 - 12345",
+        numero: "FACT-2026-0001",
+        dateEmission: new Date(2026, 7, 22),
+        totalTtc: 10,
+      }),
     );
-    expect(charge.split(" - ")).toHaveLength(4);
+    expect(charge).toContain("IF:409 12345");
+    // Neuf segments : UUID, IF, ICE, numéro, date, HT, TVA, TTC, empreinte.
+    expect(charge.split(" - ")).toHaveLength(9);
   });
 
   it("écrit le montant sans séparateur de milliers, et en point décimal", () => {
@@ -478,13 +559,15 @@ describe("la charge utile", () => {
     // décimale en est absente elle aussi. Le montant imprimé sur la
     // facture, lui, reste bien formaté à la française.
     expect(
-      chargeUtileQr({
-        identifiantFiscal: "1",
-        numero: "F",
-        dateEmission: new Date(2026, 0, 1),
-        totalTtc: 1234567.5,
-      }),
-    ).toContain("TOTAL TTC 1234567.50 MAD");
+      chargeUtileQr(
+        donneesQr({
+          identifiantFiscal: "1",
+          numero: "F",
+          dateEmission: new Date(2026, 0, 1),
+          totalTtc: 1234567.5,
+        }),
+      ),
+    ).toContain("TTC:1234567.50");
   });
 
   it("produit une matrice carrée non vide", () => {
@@ -492,5 +575,178 @@ describe("la charge utile", () => {
     expect(matrice.length).toBeGreaterThan(0);
     expect(matrice.every((ligne) => ligne.length === matrice.length)).toBe(true);
     expect(matrice.flat().some(Boolean)).toBe(true);
+  });
+});
+
+/**
+ * L'icône au centre du symbole.
+ *
+ * Le seul test qui compte vraiment ici : la correction d'erreur
+ * reconstruit-elle les modules que le logo recouvre ? Tout le reste — le
+ * niveau Q, la taille du disque — n'est qu'un réglage pour que la réponse
+ * soit oui.
+ */
+describe("l'icône posée au centre", () => {
+  it("laisse le symbole se décoder malgré les modules recouverts", async () => {
+    const pdf = await renderInvoicePdf(facture());
+    const { matrice } = matriceDepuisPdf(pdf);
+
+    // Le disque est déjà absent du tracé ; on le noircit pour simuler ce
+    // qu'un scanner voit vraiment — une pastille opaque, pas du blanc.
+    const centre = (matrice.length - 1) / 2;
+    const rayon = (matrice.length * PART_LOGO) / 2 + 0.5;
+    const avecLogo = matrice.map((ligne, l) =>
+      ligne.map((module, c) =>
+        Math.hypot(l - centre, c - centre) <= rayon ? true : module,
+      ),
+    );
+
+    expect(decoder(avecLogo)).toBe(
+      "UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:40912345 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:1938563148516F09",
+    );
+  });
+
+  it("se décode encore sur un scan grossier, logo compris", async () => {
+    // Deux dégradations à la fois : les modules perdus sous l'icône, et
+    // une photo médiocre. C'est le cas réel d'une facture photographiée
+    // de travers au comptoir.
+    const pdf = await renderInvoicePdf(facture());
+    const { matrice } = matriceDepuisPdf(pdf);
+    const centre = (matrice.length - 1) / 2;
+    const rayon = (matrice.length * PART_LOGO) / 2 + 0.5;
+    const avecLogo = matrice.map((ligne, l) =>
+      ligne.map((module, c) =>
+        Math.hypot(l - centre, c - centre) <= rayon ? true : module,
+      ),
+    );
+
+    expect(decoderA(avecLogo, 3)).toBe(
+      "UUID:3F2A9C417B6E4D189E520A7C4B1D8E63 - IF:40912345 - ICE:001234567000089 - FACT:FACT-2026-0042 - 22/08/2026 - HT:1041.67 - TVA:208.33 - TTC:1250.00 - H:1938563148516F09",
+    );
+  });
+
+  it("réserve un disque, pas un carré", () => {
+    // Le logo est une pastille ronde : une réserve carrée laisserait
+    // quatre coins de blanc autour d'elle.
+    const source = readFileSync(
+      resolve(__dirname, "../..", "lib/pdf/document.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(/Math\.hypot\(ligne - centre, colonne - centre\) <= rayon/);
+    expect(source).toContain("ctx.page.drawCircle({");
+  });
+
+  it("ne dessine pas les modules cachés sous l'icône", async () => {
+    /*
+     * Les tracer puis les couvrir donnerait le même résultat à l'œil, mais
+     * un lecteur de PDF qui ignore l'ordre de superposition — ou une
+     * conversion en niveaux de gris — les ferait réapparaître au travers.
+     */
+    const { matrice } = matriceDepuisPdf(await renderInvoicePdf(facture()));
+    const centre = (matrice.length - 1) / 2;
+    const rayon = (matrice.length * PART_LOGO) / 2 + 0.5;
+
+    for (let ligne = 0; ligne < matrice.length; ligne += 1) {
+      for (let colonne = 0; colonne < matrice.length; colonne += 1) {
+        if (Math.hypot(ligne - centre, colonne - centre) > rayon) continue;
+        expect(matrice[ligne]![colonne], `module (${ligne}, ${colonne}) tracé sous l'icône`).toBe(
+          false,
+        );
+      }
+    }
+  });
+});
+
+/** `decoder`, à une échelle choisie — pour éprouver un scan grossier. */
+function decoderA(matrice: boolean[][], pxParModule: number): string | null {
+  const MARGE = 4;
+  const modules = matrice.length + 2 * MARGE;
+  const cote = modules * pxParModule;
+  const pixels = new Uint8ClampedArray(cote * cote * 4).fill(255);
+
+  for (let ligne = 0; ligne < matrice.length; ligne += 1) {
+    for (let colonne = 0; colonne < matrice.length; colonne += 1) {
+      if (!matrice[ligne]![colonne]) continue;
+      for (let dy = 0; dy < pxParModule; dy += 1) {
+        for (let dx = 0; dx < pxParModule; dx += 1) {
+          const x = (colonne + MARGE) * pxParModule + dx;
+          const y = (ligne + MARGE) * pxParModule + dy;
+          const i = (y * cote + x) * 4;
+          pixels[i] = 0;
+          pixels[i + 1] = 0;
+          pixels[i + 2] = 0;
+        }
+      }
+    }
+  }
+  return jsQR(pixels, cote, cote)?.data ?? null;
+}
+
+/**
+ * L'empreinte d'intégrité.
+ *
+ * SHA-256 tronquée à seize caractères hexadécimaux. Elle détecte une
+ * altération accidentelle — un montant retouché, une date recopiée de
+ * travers. Elle **n'empêche rien** : qui modifie la facture peut
+ * recalculer l'empreinte, le calcul étant public. Ces tests vérifient
+ * donc ce qu'elle fait réellement, pas ce qu'on aimerait qu'elle fasse.
+ */
+describe("l'empreinte d'intégrité", () => {
+  it("change dès qu'un montant change", async () => {
+    const avant = empreinteFacture(donneesQr());
+    const apres = empreinteFacture(donneesQr({ totalTtc: 1250.01 }));
+    expect(apres).not.toBe(avant);
+  });
+
+  it("change dès que le numéro ou la date changent", () => {
+    const reference = empreinteFacture(donneesQr());
+    expect(empreinteFacture(donneesQr({ numero: "FACT-2026-0043" }))).not.toBe(reference);
+    expect(empreinteFacture(donneesQr({ dateEmission: new Date(2026, 7, 23) }))).not.toBe(
+      reference,
+    );
+  });
+
+  it("change dès que l'identifiant fiscal change", () => {
+    // Sinon une facture rejouée sous une autre officine garderait la
+    // même empreinte, et la vérification ne dirait rien.
+    expect(empreinteFacture(donneesQr({ identifiantFiscal: "11111111" }))).not.toBe(
+      empreinteFacture(donneesQr()),
+    );
+  });
+
+  it("est stable pour des données identiques", () => {
+    // C'est ce qui la rend vérifiable : un tiers recalcule et compare.
+    expect(empreinteFacture(donneesQr())).toBe(empreinteFacture(donneesQr()));
+  });
+
+  it("fait seize caractères hexadécimaux majuscules", () => {
+    // Seize et pas soixante-quatre : les 48 caractères de plus coûteraient
+    // deux versions de symbole, donc un centimètre sur le papier, pour une
+    // garantie que personne n'exploite.
+    expect(empreinteFacture(donneesQr())).toMatch(/^[0-9A-F]{16}$/);
+  });
+
+  it("se recalcule depuis les champs lus dans le QR", async () => {
+    /*
+     * Le scénario réel de vérification : on scanne, on découpe, on
+     * recalcule, on compare. S'il échouait, l'empreinte porterait sur
+     * autre chose que ce que le QR affiche — elle ne vérifierait rien.
+     */
+    const donnees = facture();
+    const decode = decoder(matriceDepuisPdf(await renderInvoicePdf(donnees)).matrice)!;
+    const [, empreinteLue] = decode.split(" - H:");
+
+    expect(empreinteLue).toBe(
+      empreinteFacture({
+        uuid: donnees.id,
+        identifiantFiscal: donnees.pharmacyIdentifiantFiscal,
+        ice: donnees.pharmacyIce,
+        numero: donnees.number,
+        dateEmission: donnees.issuedAt,
+        totalHt: donnees.totalHt,
+        totalTva: donnees.totalTva,
+        totalTtc: donnees.totalTtc,
+      }),
+    );
   });
 });

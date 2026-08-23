@@ -33,6 +33,7 @@ import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
 import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { formatSaleReference } from "@/lib/sales/returns";
+import { sessionEnRetard } from "@/lib/caisse/journal-z";
 import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales";
 import { computeLoyaltyPoints, creditSaleMovement } from "@/lib/clients/account";
 import { addLoyaltyPoints, recordClientTransaction } from "@/lib/server/client-account";
@@ -81,12 +82,56 @@ export type Receipt = {
 
 export async function createSale(
   input: CreateSaleInput,
-  options?: { id?: string },
+  options?: {
+    id?: string;
+    /**
+     * Quand la vente a réellement eu lieu, pour une vente hors ligne
+     * rejouée plus tard. Absent sur une vente passée en direct.
+     */
+    occurredAt?: Date;
+  },
 ): Promise<Receipt> {
   const user = await requireUser();
   const parsed = createSaleSchema.parse(input);
 
   const receipt = await prisma.$transaction(async (tx) => {
+    /*
+     * Aucune vente sans caisse ouverte, quel que soit le mode de paiement.
+     * Une vente par carte ne touche pas le tiroir, mais elle entre dans le
+     * Z : la laisser passer hors session la rendrait invisible de la
+     * journée comptable.
+     *
+     * Le contrôle est ici, dans la transaction, et non seulement à
+     * l'écran : le point de vente hors ligne rejoue ses ventes par cette
+     * même fonction, sans jamais passer par l'écran de blocage.
+     */
+    const session = await tx.caisseSession.findFirst({
+      where: { pharmacyId: user.pharmacyId, statut: "OUVERTE" },
+      select: { id: true, dateOuverture: true },
+    });
+    if (!session) {
+      throw new Error("Caisse non ouverte. Saisissez le fond de caisse avant de vendre.");
+    }
+
+    const maintenant = new Date();
+    if (sessionEnRetard(session.dateOuverture, maintenant)) {
+      // Pas de cumul sur plusieurs jours : chaque journée a son propre Z.
+      const jour = session.dateOuverture.toLocaleDateString("fr-FR");
+      throw new Error(
+        `Une session du ${jour} n'a pas été clôturée. Fermez-la avant de continuer.`,
+      );
+    }
+
+    /*
+     * Rattrapage : la vente s'est produite un jour dont la session est
+     * déjà close. On ne rouvre jamais une session fermée — son Z est
+     * archivé et ses ventes sont figées en base. Elle rejoint donc la
+     * session courante, marquée pour que le Z du jour dise que ce montant
+     * n'est pas de sa journée.
+     */
+    const rattrapage =
+      options?.occurredAt !== undefined &&
+      sessionEnRetard(options.occurredAt, session.dateOuverture);
     // Tenant-scoped, same as products below: a tampered clientId from
     // another pharmacy must not be attachable to this sale.
     let client: { id: string; name: string } | null = null;
@@ -271,6 +316,8 @@ export async function createSale(
         // Une part assurance nulle ne cree aucune creance, meme si un
         // organisme a ete choisi : il n'y aurait rien a reclamer.
         statutCreance: partage.partAssurance > 0 ? "EN_ATTENTE_BORDEREAU" : "AUCUNE",
+        caisseSessionId: session.id,
+        rattrapageOffline: rattrapage,
       },
     });
 
@@ -357,6 +404,7 @@ export async function createSale(
         paiement: parsed.paymentMethod,
         client: client?.name ?? null,
         lignes: items.length,
+        ...(rattrapage ? { rattrapageOffline: true } : {}),
       },
     });
 

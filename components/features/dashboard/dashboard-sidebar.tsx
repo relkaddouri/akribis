@@ -17,6 +17,7 @@ import {
   Receipt,
   Rss,
   Settings,
+  Landmark,
   ShoppingCart,
   Users,
 } from "lucide-react";
@@ -56,6 +57,13 @@ const BORDEREAUX_ITEM: NavItem = {
   href: "/bordereaux",
   icon: FileSpreadsheet,
 };
+
+/**
+ * Le cycle de caisse, distinct des Rapports : on n'y vient pas consulter
+ * des chiffres mais poser un acte — ouvrir le matin, clôturer le soir. Et
+ * l'historique des Z est une archive comptable, pas une statistique.
+ */
+const JOURNAL_Z_ITEM: NavItem = { label: "Journal Z", href: "/caisse", icon: Landmark };
 
 const REPORTS_ITEM: NavItem = { label: "Rapports", href: "/dashboard/stats", icon: BarChart3 };
 
@@ -229,6 +237,11 @@ export function DashboardSidebar({
               <SidebarLink
                 item={BORDEREAUX_ITEM}
                 active={isActivePath(pathname, BORDEREAUX_ITEM.href)}
+                collapsed={collapsed}
+              />
+              <SidebarLink
+                item={JOURNAL_Z_ITEM}
+                active={isActivePath(pathname, JOURNAL_Z_ITEM.href)}
                 collapsed={collapsed}
               />
               {role === "owner" && (

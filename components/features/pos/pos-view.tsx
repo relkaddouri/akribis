@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDashboardUser } from "@/components/providers/dashboard-user-provider";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Maximize2, Minimize2, ShoppingCart } from "lucide-react";
 import { addToCart, type CartLine } from "@/lib/pos/cart";
@@ -24,12 +25,38 @@ import {
   ClientPicker,
   type SelectedClient,
 } from "@/components/features/pos/client-picker";
+import { CaisseBarre } from "@/components/features/caisse/caisse-barre";
+import {
+  DialogueCloture,
+  DialogueOuverture,
+} from "@/components/features/caisse/caisse-dialogues";
+import type { EtatCaisse, ResumeSession } from "@/lib/server/caisse";
+import { useEtatCaisse } from "@/components/features/caisse/use-session-locale";
 
 /** How long an added line stays highlighted. */
 const FLASH_MS = 700;
 
-export function PosView() {
+export function PosView({
+  etatCaisse,
+  resume,
+  cloture,
+}: {
+  etatCaisse: EtatCaisse;
+  /** Nul quand aucune session n'est ouverte. */
+  resume: ResumeSession | null;
+  cloture: { possible: boolean; raison?: string; pinRequis: boolean };
+}) {
   const queryClient = useQueryClient();
+  const [clotureOuverte, setClotureOuverte] = useState(false);
+  /*
+   * L'état du serveur est celui du dernier chargement de page. Hors ligne
+   * cette page vient du cache : une caisse ouverte depuis n'y figure pas,
+   * et le comptoir resterait verrouillé toute la journée. Le crochet
+   * complète l'état serveur par la session écrite sur l'appareil.
+   */
+  const utilisateur = useDashboardUser();
+  const { etat, resume: resumeCourant, ouvrirLocalement } = useEtatCaisse(etatCaisse, resume);
+  const caisseOuverte = etat.etat === "ouverte";
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -271,6 +298,23 @@ export function PosView() {
       )}
       onKeyDown={handleKeyDown}
     >
+      {/*
+        Le comptoir reste à l'écran derrière la fenêtre d'ouverture, flouté
+        et inerte. Le remplacer par une page d'attente ferait perdre de vue
+        où l'on est ; le laisser actif inviterait à scanner un produit qui
+        serait refusé à la validation.
+
+        `inert` coupe le pointeur, le clavier et le lecteur d'écran d'un
+        seul attribut — un `pointer-events-none` laisserait la tabulation
+        parcourir un panier invisible.
+      */}
+      <div
+        className={cn(
+          "flex flex-col gap-sp-lg transition-[filter,opacity]",
+          !caisseOuverte && "pointer-events-none select-none blur-sm opacity-60",
+        )}
+        inert={!caisseOuverte}
+      >
       <DashboardHeader
         title="Caisse"
         icon={<ShoppingCart />}
@@ -286,6 +330,15 @@ export function PosView() {
           </Button>
         }
       />
+
+      {resumeCourant && (
+        <CaisseBarre
+          resume={resumeCourant}
+          clotureDisponible={cloture.possible}
+          raisonIndisponible={cloture.raison}
+          onCloturer={() => setClotureOuverte(true)}
+        />
+      )}
 
       {/*
         Deux colonnes : à gauche ce que l'officine vend, à droite ce qu'elle
@@ -368,6 +421,28 @@ export function PosView() {
           visible derrière le ticket, et « Nouvelle vente » n'est plus une
           navigation mais une fermeture. */}
       {receipt && <ReceiptView receipt={receipt} onNewSale={handleNewSale} />}
+      </div>
+
+      {!caisseOuverte && (
+        <DialogueOuverture
+          etat={etat}
+          onOuvrirLocalement={(fond) =>
+            // Le nom de l'ouvreur vient de la session du tableau de bord :
+            // hors ligne, le serveur ne peut plus le donner, et la bande
+            // afficherait « ouverte par » suivi de rien.
+            ouvrirLocalement(fond, utilisateur.name ?? utilisateur.email)
+          }
+        />
+      )}
+
+      {resumeCourant && (
+        <DialogueCloture
+          ouvert={clotureOuverte}
+          onOpenChange={setClotureOuverte}
+          fondInitial={etat.etat === "ouverte" ? etat.session.fondCaisseInitial : 0}
+          pinRequis={cloture.pinRequis}
+        />
+      )}
     </div>
   );
 }

@@ -29,6 +29,8 @@ export type PharmacySettings = {
   ice: string | null;
   /** IF — l'identifiant fiscal DGI. Distinct de l'ICE ; porté par le QR des factures. */
   identifiantFiscal: string | null;
+  /** Le titulaire autorise-t-il un assistant à clôturer la caisse ? */
+  clotureAssistantAutorisee: boolean;
   orderNumber: string | null;
   inpe: string | null;
   patente: string | null;
@@ -107,6 +109,7 @@ export async function getPharmacySettings(): Promise<PharmacySettings> {
     phone: pharmacy.phone,
     ice: pharmacy.ice,
     identifiantFiscal: pharmacy.identifiantFiscal,
+    clotureAssistantAutorisee: pharmacy.clotureAssistantAutorisee,
     orderNumber: pharmacy.orderNumber,
     inpe: pharmacy.inpe,
     patente: pharmacy.patente,

@@ -1,4 +1,5 @@
 import { getInvoice } from "@/lib/server/invoices";
+import { getReceiptBranding } from "@/lib/server/pharmacy";
 import { renderInvoicePdf } from "@/lib/invoices/pdf";
 import { ENTITES } from "@/lib/audit/event-log";
 import { journaliserTelechargement } from "@/lib/audit/export-document";
@@ -13,7 +14,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const invoice = await getInvoice(id);
+  const [invoice, branding] = await Promise.all([getInvoice(id), getReceiptBranding()]);
   if (!invoice) {
     return new Response("Facture introuvable", { status: 404 });
   }
@@ -24,7 +25,7 @@ export async function GET(
     nom: invoice.number,
   });
 
-  const pdf = await renderInvoicePdf(invoice);
+  const pdf = await renderInvoicePdf(invoice, branding);
 
   return new Response(pdf as BodyInit, {
     headers: {

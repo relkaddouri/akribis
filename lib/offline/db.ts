@@ -68,6 +68,7 @@ export type LocalProduct = ProductRecord & {
 };
 
 export type SyncOperationType =
+  | "ouvrirCaisse"
   | "createProduct"
   | "updateProduct"
   | "createSale"
@@ -135,7 +136,7 @@ export type ConflictResolution =
 
 export type ConflictLogItem = {
   id: string;
-  entityType: "product" | "sale" | "order" | "inventory";
+  entityType: "product" | "sale" | "order" | "inventory" | "caisse";
   entityId: string;
   queueItemId: string;
   clientTimestamp: Date;
@@ -172,12 +173,31 @@ export type LocalInventoryCount = {
   dateComptage: Date | null;
 };
 
+/**
+ * Une session de caisse ouverte sur cet appareil.
+ *
+ * Seule l'ouverture vit ici. La clôture, non : elle additionne les ventes
+ * de la session pour en tirer le théorique, et un appareil hors ligne
+ * n'en connaît que les siennes — celles passées sur le poste d'à côté lui
+ * manquent. Un Z calculé sur une moitié de journée serait faux, et figé
+ * une fois écrit.
+ */
+export type LocalCaisseSession = {
+  id: string;
+  pharmacyId: string;
+  fondCaisseInitial: number;
+  dateOuverture: Date;
+  ouvreurNom: string;
+  syncStatus: SyncStatus;
+};
+
 class AkribisOfflineDB extends Dexie {
   products!: Table<LocalProduct, string>;
   syncQueue!: Table<SyncQueueItem, string>;
   conflictLog!: Table<ConflictLogItem, string>;
   inventorySessions!: Table<LocalInventorySession, string>;
   inventoryCounts!: Table<LocalInventoryCount, string>;
+  caisseSessions!: Table<LocalCaisseSession, string>;
 
   constructor() {
     super("akribis-offline");
@@ -191,6 +211,12 @@ class AkribisOfflineDB extends Dexie {
     this.version(2).stores({
       inventorySessions: "id, pharmacyId, statut, dateDebut",
       inventoryCounts: "id, sessionId, productId, [sessionId+productId]",
+    });
+    // v3 ajoute l'ouverture de caisse hors ligne. Comme pour v2, Dexie
+    // reporte les magasins existants tels quels : une installation en
+    // cours garde ses écritures en attente et son cache produits.
+    this.version(3).stores({
+      caisseSessions: "id, pharmacyId, dateOuverture",
     });
   }
 }
