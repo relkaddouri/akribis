@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { isAuthRetryableFetchError, type User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import {
+  getEffectiveRoleFromUser,
   getPharmacyIdFromUser,
   getSessionRoleFromUser,
   isAdminRole,
@@ -14,6 +15,7 @@ import {
   LOGIN_PATH,
   DEFAULT_AUTHENTICATED_PATH,
   DEFAULT_ADMIN_PATH,
+  NO_ROLE_LOGIN_PATH,
 } from "@/lib/auth/access-control";
 
 export type SessionUser = {
@@ -71,7 +73,10 @@ function displayName(user: User): string | null {
  * scope their queries by `pharmacyId`, must not receive them.
  */
 export async function getSessionUser(): Promise<SessionUser | null> {
-  const user = await readAuthUser();
+  return toSessionUser(await readAuthUser());
+}
+
+function toSessionUser(user: User | null): SessionUser | null {
   if (!user) return null;
 
   const role = getSessionRoleFromUser(user);
@@ -87,10 +92,29 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   };
 }
 
-/** For Server Components/Actions: redirects to /login if not signed in. */
+/**
+ * Where to send a signed-in account a guard turned away. Never plain
+ * /login: the middleware bounces anyone with a role off that page, so an
+ * account the guard rejects would come straight back here. An account
+ * with no usable role is sent to /login with an explanation, and the
+ * middleware lets it stay there.
+ */
+function homeForSignedInUser(user: User): string {
+  const role = getEffectiveRoleFromUser(user);
+  if (isAdminRole(role)) return DEFAULT_ADMIN_PATH;
+  if (isPharmacyRole(role)) return DEFAULT_AUTHENTICATED_PATH;
+  return NO_ROLE_LOGIN_PATH;
+}
+
+/**
+ * For Server Components/Actions: redirects to /login if not signed in, and
+ * a signed-in account that is not a pharmacy user to its own home.
+ */
 export async function requireUser(): Promise<SessionUser> {
-  const user = await getSessionUser();
-  if (!user) redirect(LOGIN_PATH);
+  const authUser = await readAuthUser();
+  if (!authUser) redirect(LOGIN_PATH);
+  const user = toSessionUser(authUser);
+  if (!user) redirect(homeForSignedInUser(authUser));
   return user;
 }
 
@@ -106,7 +130,10 @@ export async function requireOwner(): Promise<SessionUser> {
 }
 
 export async function getAdminUser(): Promise<AdminUser | null> {
-  const user = await readAuthUser();
+  return toAdminUser(await readAuthUser());
+}
+
+function toAdminUser(user: User | null): AdminUser | null {
   if (!user) return null;
 
   const role = getSessionRoleFromUser(user);
@@ -126,11 +153,12 @@ export async function getAdminUser(): Promise<AdminUser | null> {
  * form they're already past would read as a broken app.
  */
 export async function requireAdmin(): Promise<AdminUser> {
-  const admin = await getAdminUser();
+  const authUser = await readAuthUser();
+  if (!authUser) redirect(LOGIN_PATH);
+  const admin = toAdminUser(authUser);
   if (admin) return admin;
 
-  const pharmacyUser = await getSessionUser();
-  redirect(pharmacyUser ? DEFAULT_AUTHENTICATED_PATH : LOGIN_PATH);
+  redirect(homeForSignedInUser(authUser));
 }
 
 /** Where to send someone right after they sign in. */

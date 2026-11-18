@@ -2,13 +2,14 @@ import Link from "next/link";
 import { LoginForm } from "@/components/features/auth/login-form";
 import { AuthShell } from "@/components/features/auth/auth-shell";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { NO_ROLE_MESSAGE, NO_ROLE_REASON } from "@/lib/auth/access-control";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ reset?: string }>;
+  searchParams: Promise<{ reset?: string; raison?: string }>;
 }) {
-  const { reset } = await searchParams;
+  const { reset, raison } = await searchParams;
 
   return (
     <AuthShell title="Bon retour" subtitle="Connectez-vous pour accéder à votre pharmacie">
@@ -17,6 +18,12 @@ export default async function LoginPage({
           <AlertDescription>
             Mot de passe réinitialisé avec succès. Connectez-vous avec votre nouveau mot de passe.
           </AlertDescription>
+        </Alert>
+      )}
+
+      {raison === NO_ROLE_REASON && (
+        <Alert variant="destructive">
+          <AlertDescription>{NO_ROLE_MESSAGE}</AlertDescription>
         </Alert>
       )}
 

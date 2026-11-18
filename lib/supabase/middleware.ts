@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
-import { getSessionRoleFromUser } from "@/lib/auth/roles";
+import { getEffectiveRoleFromUser } from "@/lib/auth/roles";
 import { CONFIG_ERROR_PATH, resolveAuthRedirect } from "@/lib/auth/access-control";
 
 /**
@@ -99,13 +99,17 @@ export async function updateSession(request: NextRequest) {
   const redirectPath = resolveAuthRedirect({
     pathname: request.nextUrl.pathname,
     isAuthenticated: !!user,
-    role: getSessionRoleFromUser(user),
+    role: getEffectiveRoleFromUser(user),
   });
 
   if (redirectPath) {
+    // Resolved against the request rather than assigned to `pathname`:
+    // the target may carry a query string (`/login?raison=sans-role`),
+    // which `pathname` would percent-encode into the path itself.
+    const target = new URL(redirectPath, request.nextUrl.origin);
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = redirectPath;
-    redirectUrl.search = "";
+    redirectUrl.pathname = target.pathname;
+    redirectUrl.search = target.search;
     return NextResponse.redirect(redirectUrl);
   }
 

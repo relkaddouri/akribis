@@ -91,6 +91,39 @@ describe("middleware", () => {
     expect(response.status).toBe(200);
   });
 
+  describe("a signed-in account with no usable role", () => {
+    it("is sent from /dashboard to /login?raison=sans-role, not back to /dashboard", async () => {
+      mockUser = { app_metadata: {} };
+
+      const response = await middleware(requestFor("/dashboard"));
+
+      expect(response.status).toBe(307);
+      const location = new URL(response.headers.get("location")!);
+      expect(location.pathname).toBe("/login");
+      expect(location.searchParams.get("raison")).toBe("sans-role");
+    });
+
+    it("may stay on /login", async () => {
+      mockUser = { app_metadata: {} };
+
+      const response = await middleware(requestFor("/login?raison=sans-role"));
+
+      expect(response.headers.get("location")).toBeNull();
+    });
+
+    it("treats a pharmacy role without a pharmacy as no role", async () => {
+      // The middleware would let it into /dashboard, requireUser() would
+      // send it to /login, and /login would send it back to /dashboard.
+      mockUser = { app_metadata: { role: "owner" } };
+
+      const toDashboard = await middleware(requestFor("/dashboard"));
+      expect(new URL(toDashboard.headers.get("location")!).pathname).toBe("/login");
+
+      const onLogin = await middleware(requestFor("/login"));
+      expect(onLogin.headers.get("location")).toBeNull();
+    });
+  });
+
   describe("when Supabase's auth server is unreachable", () => {
     it("keeps an already-authenticated visitor on a protected route via the locally cached session", async () => {
       mockUser = null; // getUser() couldn't verify anything
