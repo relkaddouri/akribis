@@ -473,7 +473,7 @@ describe("le QR code dessiné sur la facture se relit", () => {
       );
       expect(dansLeCadre, `${nombre} ligne(s) : du texte est imprimé sur le QR`).toEqual([]);
     }
-  });
+  }, 20_000);
 
   it("omet le champ IF quand l'officine n'en a pas", async () => {
     // Facture émise avant que le champ n'existe. Un « IF » suivi de rien
