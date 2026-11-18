@@ -6,6 +6,7 @@ import {
   fit,
   MARGIN,
   MUTED,
+  piedDePage,
   rule,
   text,
   textRight,
@@ -47,6 +48,11 @@ export async function renderPurchaseOrderPdf(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   let page = doc.addPage([A4.width, A4.height]);
   let ctx: PdfContext = { page, font, bold };
+  /*
+   * Les pages sont collectées au fil du rendu : le pied porte « Page X
+   * sur Y », et Y n'est connu qu'une fois la dernière ligne écrite.
+   */
+  const pages: PdfContext[] = [ctx];
 
   const right = A4.width - MARGIN;
   let y = A4.height - MARGIN;
@@ -108,6 +114,7 @@ export async function renderPurchaseOrderPdf(
     if (y < MARGIN + 100) {
       page = doc.addPage([A4.width, A4.height]);
       ctx = { page, font, bold };
+      pages.push(ctx);
       y = A4.height - MARGIN;
     }
     text(ctx, fit(ctx, line.productName, 285, 10), MARGIN, y);
@@ -123,6 +130,10 @@ export async function renderPurchaseOrderPdf(
 
   textRight(ctx, "Total commande", right - 110, y, { size: 12, bold: true });
   textRight(ctx, formatMad(order.totalAmount), right, y, { size: 12, bold: true });
+
+  pages.forEach((pageDuDocument, index) =>
+    piedDePage(pageDuDocument, index + 1, pages.length),
+  );
 
   return doc.save();
 }

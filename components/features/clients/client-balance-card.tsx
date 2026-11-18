@@ -6,6 +6,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Award, Wallet } from "lucide-react";
 import { registerClientPayment } from "@/lib/server/client-account";
 import { amountOwed, getBalanceState } from "@/lib/clients/account";
+import { margeDisponible } from "@/lib/clients/plafond";
 import { formatMad } from "@/lib/invoices/totals";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -31,15 +32,22 @@ export function ClientBalanceCard({
   clientId,
   solde,
   points,
+  plafondCredit,
 }: {
   clientId: string;
   solde: number;
   points: number;
+  /** `null` = aucun plafond fixé sur la fiche. */
+  plafondCredit: number | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const state = getBalanceState(solde);
+  // Collée au solde, et pas rangée dans une section « Crédit » à part : la
+  // question que le pharmacien se pose est « puis-je encore lui faire
+  // crédit », et elle se répond en lisant les deux nombres ensemble.
+  const marge = margeDisponible(solde, plafondCredit);
 
   const mutation = useMutation({
     mutationFn: () => registerClientPayment({ clientId, amount: Number(amount) }),
@@ -69,6 +77,16 @@ export function ClientBalanceCard({
           <p className="font-heading text-4xl font-extrabold tabular-nums">
             {formatMad(state === "debt" ? amountOwed(solde) : Math.abs(solde))}
           </p>
+          {plafondCredit === null ? (
+            <p className="mt-sp-xs text-sm opacity-80">Aucun plafond de crédit fixé</p>
+          ) : (
+            <p className="mt-sp-xs text-sm opacity-80">
+              Plafond {formatMad(plafondCredit)} ·{" "}
+              <span className="font-medium tabular-nums">
+                {marge === 0 ? "plafond atteint" : `${formatMad(marge!)} encore disponibles`}
+              </span>
+            </p>
+          )}
         </div>
         <Button variant={state === "settled" ? "default" : "outline"} onClick={() => setOpen(true)}>
           Enregistrer un paiement

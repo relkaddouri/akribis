@@ -27,7 +27,13 @@ export type PharmacySettings = {
   address: string | null;
   phone: string | null;
   ice: string | null;
+  /** IF — l'identifiant fiscal DGI. Distinct de l'ICE ; porté par le QR des factures. */
+  identifiantFiscal: string | null;
+  /** Le titulaire autorise-t-il un assistant à clôturer la caisse ? */
+  clotureAssistantAutorisee: boolean;
   orderNumber: string | null;
+  inpe: string | null;
+  patente: string | null;
   logoUrl: string | null;
   receiptSettings: ReceiptSettings;
   /** Dirhams per loyalty point; 0 means the programme is off. */
@@ -42,6 +48,10 @@ export type ReceiptBranding = {
   address: string | null;
   phone: string | null;
   ice: string | null;
+  /// Identifiants réclamés par les organismes de tiers payant sur un
+  /// bordereau. Absents du ticket de caisse, qui n'en a que faire.
+  inpe: string | null;
+  patente: string | null;
   logoUrl: string | null;
   showLogo: boolean;
   legalNotice: string | null;
@@ -63,6 +73,8 @@ export async function getReceiptBranding(): Promise<ReceiptBranding> {
       address: true,
       phone: true,
       ice: true,
+      inpe: true,
+      patente: true,
       logoUrl: true,
       receiptSettings: true,
       loyaltyRate: true,
@@ -75,6 +87,8 @@ export async function getReceiptBranding(): Promise<ReceiptBranding> {
     address: pharmacy.address,
     phone: pharmacy.phone,
     ice: pharmacy.ice,
+    inpe: pharmacy.inpe,
+    patente: pharmacy.patente,
     logoUrl: pharmacy.logoUrl,
     showLogo: settings.showLogo,
     legalNotice: settings.legalNotice,
@@ -94,7 +108,11 @@ export async function getPharmacySettings(): Promise<PharmacySettings> {
     address: pharmacy.address,
     phone: pharmacy.phone,
     ice: pharmacy.ice,
+    identifiantFiscal: pharmacy.identifiantFiscal,
+    clotureAssistantAutorisee: pharmacy.clotureAssistantAutorisee,
     orderNumber: pharmacy.orderNumber,
+    inpe: pharmacy.inpe,
+    patente: pharmacy.patente,
     logoUrl: pharmacy.logoUrl,
     receiptSettings: parseReceiptSettings(pharmacy.receiptSettings),
     loyaltyRate: Number(pharmacy.loyaltyRate),
@@ -141,7 +159,10 @@ export async function updatePharmacyInfoAction(
     address: formData.get("address"),
     phone: formData.get("phone"),
     ice: formData.get("ice"),
+    identifiantFiscal: formData.get("identifiantFiscal"),
     orderNumber: formData.get("orderNumber"),
+    inpe: formData.get("inpe"),
+    patente: formData.get("patente"),
     loyaltyRate: formData.get("loyaltyRate"),
   });
   if (!parsed.success) {

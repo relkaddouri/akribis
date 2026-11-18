@@ -16,6 +16,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/lib/db/generated/client";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { allocateDocumentNumber } from "@/lib/server/sequences";
 import {
   affectsStock,
@@ -189,6 +190,22 @@ export async function createSupplierCredit(
       }
     }
 
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.avoirFournisseurEmis,
+      entite: ENTITES.avoirFournisseur,
+      entiteId: created.id,
+      pharmacyId: user.pharmacyId,
+      // L'émission fait sortir la marchandise du stock : le journal retient
+      // le volume concerné, qui est ce qu'on vient vérifier après coup.
+      apres: {
+        nom: `Avoir n° ${created.numero}`,
+        fournisseur: input.supplierId,
+        lignes: lines.length,
+        rappelDeLot: input.lieRappelLot === true,
+      },
+    });
+
     return created;
   });
 
@@ -222,6 +239,12 @@ export async function settleSupplierCredit(
       throw new Error("Cet avoir a déjà été réceptionné.");
     }
 
+    // Capturé avant l'écriture, et non relu après : ne pas dépendre de la
+    // question de savoir si l'objet lu plus haut est une copie ou une vue
+    // sur la ligne. Prisma en rend une copie, mais l'entrée du journal ne
+    // doit pas reposer là-dessus.
+    const statutAvant = credit.statut;
+
     await tx.supplierCredit.update({
       where: { id: credit.id },
       data: {
@@ -229,6 +252,18 @@ export async function settleSupplierCredit(
         dateReception: new Date(),
         modeCompensation: modeCompensation.toUpperCase() as "AVOIR_CREDIT" | "ESPECES",
       },
+    });
+
+    // Un changement d'état, donc un avant/après : c'est exactement ce que
+    // le journal sait montrer, et la seule chose que la réception modifie.
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.avoirFournisseurRecu,
+      entite: ENTITES.avoirFournisseur,
+      entiteId: credit.id,
+      pharmacyId: user.pharmacyId,
+      avant: { statut: statutAvant, modeCompensation: null },
+      apres: { statut: "RECU", modeCompensation },
     });
   });
 

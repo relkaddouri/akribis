@@ -3,6 +3,16 @@ import { z } from "zod";
 export const createSaleSchema = z.object({
   paymentMethod: z.enum(["CASH", "CARD", "CREDIT"], { message: "Moyen de paiement invalide" }),
   clientId: z.string().min(1).optional(),
+  /**
+   * L'organisme de tiers payant retenu pour cette vente. Absent = vente
+   * payée intégralement par le client.
+   *
+   * Seul l'identifiant traverse : les montants sont recalculés côté
+   * serveur, à partir de ses propres données produit et du taux de
+   * l'organisme. Un panier qui enverrait ses montants pourrait annoncer
+   * n'importe quelle part assurance.
+   */
+  insurerId: z.string().min(1).optional(),
   items: z
     .array(
       z.object({

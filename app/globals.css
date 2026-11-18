@@ -223,6 +223,27 @@
     visibility: visible;
   }
 
+  /*
+   * Le ticket vit désormais dans une boîte de dialogue, dont le contenu
+   * est `fixed` et translaté de -50 % sur les deux axes. Sans cette
+   * remise à plat, le `position: absolute` du ticket se calerait sur ce
+   * parent décalé et la feuille sortirait tronquée : on imprimerait un
+   * quart de ticket au milieu d'une page vide.
+   */
+  [data-slot="dialog-content"] {
+    position: static;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    transform: none;
+    box-shadow: none;
+  }
+
+  [data-slot="dialog-overlay"] {
+    display: none;
+  }
+
   [data-print-area] {
     position: absolute;
     top: 0;

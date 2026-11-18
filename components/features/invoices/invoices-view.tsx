@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Eye, FileText } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { listInvoices, type InvoiceListItem } from "@/lib/server/invoices";
 import { formatMad } from "@/lib/invoices/totals";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +60,7 @@ const columns: DataTableColumn<InvoiceListItem>[] = [
 ];
 
 export function InvoicesView() {
+  const router = useRouter();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState("");
@@ -139,15 +141,14 @@ export function InvoicesView() {
         isLoading={invoicesQuery.isLoading}
         emptyTitle="Aucune facture"
         emptyDescription="Générez une facture à partir d'une ou plusieurs ventes."
+        onRowClick={(invoice) => router.push(`/factures/${invoice.id}`)}
         rowActions={(invoice) => (
           <div className="flex items-center gap-sp-xs">
-            <Link
-              href={`/factures/${invoice.id}`}
-              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label={`Voir la facture ${invoice.number}`}
-            >
-              <Eye className="size-4" />
-            </Link>
+            {/* Plus d'icône « œil » : la ligne entière ouvre la facture,
+                comme dans les dix autres tableaux de l'application. Garder
+                les deux ferait deux cibles pour un même geste, dont une
+                minuscule. Le téléchargement reste, lui : il ne navigue pas,
+                et `DataTable` arrête la propagation sur cette cellule. */}
             <a
               href={`/factures/${invoice.id}/pdf`}
               className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"

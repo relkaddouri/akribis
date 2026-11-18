@@ -2,6 +2,8 @@ import { getOrder } from "@/lib/server/orders";
 import { getReceiptBranding } from "@/lib/server/pharmacy";
 import { renderPurchaseOrderPdf } from "@/lib/orders/purchase-order-pdf";
 import { formatOrderNumber } from "@/lib/orders/numbering";
+import { ENTITES } from "@/lib/audit/event-log";
+import { journaliserTelechargement } from "@/lib/audit/export-document";
 
 /**
  * Streams the purchase order as a downloadable PDF. getOrder() is
@@ -17,6 +19,12 @@ export async function GET(
   if (!order) {
     return new Response("Commande introuvable", { status: 404 });
   }
+
+  await journaliserTelechargement({
+    entite: ENTITES.bonCommande,
+    entiteId: order.id,
+    nom: formatOrderNumber(order.numero),
+  });
 
   const pdf = await renderPurchaseOrderPdf(
     {

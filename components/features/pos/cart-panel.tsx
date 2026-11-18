@@ -1,6 +1,14 @@
 "use client";
 
-import { Banknote, CreditCard, Minus, Plus, Trash2, UserRound } from "lucide-react";
+import {
+  AlertTriangle,
+  Banknote,
+  CreditCard,
+  Minus,
+  Plus,
+  Trash2,
+  UserRound,
+} from "lucide-react";
 import {
   computeCartTotal,
   getLineTotal,
@@ -9,13 +17,30 @@ import {
   type CartLine,
 } from "@/lib/pos/cart";
 import { computeChange, quickCashAmounts } from "@/lib/pos/change";
+import { calculerPartage, contientRemboursable } from "@/lib/pos/tiers-payant";
+import type { OrganismeRecord } from "@/lib/server/organismes";
+import { depassementPlafondCredit } from "@/lib/clients/plafond";
+import type { SelectedClient } from "@/components/features/pos/client-picker";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 export type PaymentMethod = "CASH" | "CARD" | "CREDIT";
 
+/** Sentinelle non vide : Radix refuse un SelectItem de valeur "". */
+const AUCUN_ORGANISME = "__aucun__";
+
 function formatMoney(value: number): string {
-  return value.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return value.toLocaleString("fr-FR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 /**
@@ -24,7 +49,13 @@ function formatMoney(value: number): string {
  * A short payment shows what's still owed as a positive amount rather
  * than negative change.
  */
-function ChangeDisplay({ total, received }: { total: number; received: number }) {
+function ChangeDisplay({
+  total,
+  received,
+}: {
+  total: number;
+  received: number;
+}) {
   const { isSufficient, change, missing } = computeChange(total, received);
 
   if (received <= 0) return null;
@@ -39,7 +70,9 @@ function ChangeDisplay({ total, received }: { total: number; received: number })
       )}
       aria-live="polite"
     >
-      <p className="text-sm font-medium">{isSufficient ? "Monnaie à rendre" : "Montant manquant"}</p>
+      <p className="text-sm font-medium">
+        {isSufficient ? "Monnaie à rendre" : "Montant manquant"}
+      </p>
       <p className="font-heading text-4xl font-extrabold tabular-nums">
         {formatMoney(isSufficient ? change : missing)}
         <span className="ml-sp-xs text-lg font-bold">MAD</span>
@@ -48,48 +81,60 @@ function ChangeDisplay({ total, received }: { total: number; received: number })
   );
 }
 
-export function CartPanel({
+/**
+ * Ce que rapporte une ligne remboursable, en sous-titre.
+ *
+ * `null` dès qu'il n'y a rien à dire — ligne non remboursable, base
+ * absente, ou aucun organisme retenu : une mention vide sur chaque ligne
+ * d'un panier de parapharmacie serait du bruit.
+ */
+function detailRemboursement(
+  line: CartLine,
+  tauxCouverture: number | null,
+  insurerNom: string | null,
+): string | null {
+  const { partAssurance } = calculerPartage([line], tauxCouverture);
+  // `partAssurance <= 0` couvre le taux absent, le taux nul, la ligne non
+  // remboursable et la base manquante — tous les cas où il n'y a rien à
+  // dire. Reste le nom, sans lequel la mention n'aurait pas de sujet.
+  if (partAssurance <= 0 || insurerNom === null) return null;
+  return ` · base ${formatMoney(line.baseRemboursement!)} → ${insurerNom} ${formatMoney(partAssurance)}`;
+}
+
+/**
+ * Les lignes du panier — ce que l'officine vend.
+ *
+ * Séparé de l'encaissement depuis que le comptoir est en deux colonnes :
+ * la liste défile à gauche, le règlement reste en vue à droite.
+ */
+export function CartLines({
   lines,
   onChangeLines,
-  paymentMethod,
-  onChangePaymentMethod,
-  cashReceived,
-  onChangeCashReceived,
-  onValidate,
-  isSubmitting,
-  canValidate,
   flashedProductId,
-  hasClient,
+  tauxCouverture,
+  insurerNom,
 }: {
   lines: CartLine[];
   onChangeLines: (lines: CartLine[]) => void;
-  paymentMethod: PaymentMethod | null;
-  onChangePaymentMethod: (method: PaymentMethod) => void;
-  /** Cash handed over, in MAD. 0 means "nothing entered yet". */
-  cashReceived: number;
-  onChangeCashReceived: (amount: number) => void;
-  onValidate: () => void;
-  isSubmitting: boolean;
-  canValidate: boolean;
-  /** Line to highlight briefly after it was just added or incremented. */
+  /** Ligne à mettre en évidence après un ajout, effacée par une minuterie. */
   flashedProductId?: string | null;
-  /** Credit is only offered with a client attached — nobody to bill otherwise. */
-  hasClient: boolean;
+  /** Taux de l'organisme retenu, pour le détail par ligne. */
+  tauxCouverture: number | null;
+  insurerNom: string | null;
 }) {
-  const total = computeCartTotal(lines);
-  const quickAmounts = quickCashAmounts(total);
-
   return (
     <div className="flex flex-col gap-sp-md">
       {lines.length === 0 ? (
         <div className="rounded-xl bg-card p-sp-2xl text-center shadow-card">
-          <p className="font-heading font-semibold text-foreground">Le panier est vide</p>
+          <p className="font-heading font-semibold text-foreground">
+            Le panier est vide
+          </p>
           <p className="mt-sp-sm text-sm text-muted-foreground">
             Scannez un code-barres ou recherchez un produit.
           </p>
         </div>
       ) : (
-        <ul className="space-y-sp-sm">
+        <ul className="space-y-sp-sm pb-sp-md">
           {lines.map((line) => (
             <li
               key={line.productId}
@@ -97,13 +142,24 @@ export function CartPanel({
                 "flex items-center gap-sp-md rounded-xl bg-card p-sp-md shadow-soft transition-colors duration-300",
                 // Confirms the add even when it only bumped the quantity of
                 // a line already in the cart, which is otherwise easy to miss.
-                flashedProductId === line.productId && "bg-accent ring-2 ring-primary",
+                flashedProductId === line.productId &&
+                  "bg-accent ring-2 ring-primary",
               )}
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-foreground">{line.productName}</p>
+                <p className="truncate font-medium text-foreground">
+                  {line.productName}
+                </p>
                 <p className="text-sm text-muted-foreground">
                   {formatMoney(line.unitPrice)} × {line.quantity}
+                  {/* La base et ce qu'elle rapporte, par ligne : c'est là
+                      que le fait existe. Le client demande au comptoir
+                      pourquoi il paie 4,61 et non 3,52 — sans la base à
+                      l'écran, le pharmacien n'a rien à répondre. Et une
+                      base aberrante (70,00 sur un produit vendu 18,00) se
+                      voit ici, avant de valider, plutôt qu'au rejet du
+                      bordereau des semaines plus tard. */}
+                  {detailRemboursement(line, tauxCouverture, insurerNom)}
                 </p>
               </div>
 
@@ -115,7 +171,13 @@ export function CartPanel({
                   aria-label={`Retirer une unité de ${line.productName}`}
                   className="size-10"
                   onClick={() =>
-                    onChangeLines(setCartLineQuantity(lines, line.productId, line.quantity - 1))
+                    onChangeLines(
+                      setCartLineQuantity(
+                        lines,
+                        line.productId,
+                        line.quantity - 1,
+                      ),
+                    )
                   }
                 >
                   <Minus className="size-4" />
@@ -131,7 +193,13 @@ export function CartPanel({
                   className="size-10"
                   disabled={line.quantity >= line.availableStock}
                   onClick={() =>
-                    onChangeLines(setCartLineQuantity(lines, line.productId, line.quantity + 1))
+                    onChangeLines(
+                      setCartLineQuantity(
+                        lines,
+                        line.productId,
+                        line.quantity + 1,
+                      ),
+                    )
                   }
                 >
                   <Plus className="size-4" />
@@ -148,7 +216,9 @@ export function CartPanel({
                 size="icon"
                 aria-label={`Retirer ${line.productName} du panier`}
                 className="size-10 text-muted-foreground hover:text-destructive"
-                onClick={() => onChangeLines(removeFromCart(lines, line.productId))}
+                onClick={() =>
+                  onChangeLines(removeFromCart(lines, line.productId))
+                }
               >
                 <Trash2 className="size-4" />
               </Button>
@@ -156,18 +226,176 @@ export function CartPanel({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
 
-      {/* Pinned to the bottom of the viewport so the total, the payment
-          choice and the validate button stay reachable however long the
-          cart grows — previously they scrolled off the end of the list. */}
-      <div className="sticky bottom-0 z-10 space-y-sp-md rounded-xl bg-card p-sp-md shadow-card">
-        <div className="flex items-baseline justify-between">
-          <span className="text-lg font-medium text-muted-foreground">Total</span>
-          <span className="font-heading text-4xl font-extrabold tabular-nums text-foreground">
-            {formatMoney(total)}
-            <span className="ml-sp-xs text-lg font-bold">MAD</span>
-          </span>
+/** Ce que l'officine encaisse : organisme, montants, paiement, validation. */
+export function CheckoutPanel({
+  lines,
+  paymentMethod,
+  onChangePaymentMethod,
+  cashReceived,
+  onChangeCashReceived,
+  onValidate,
+  isSubmitting,
+  canValidate,
+  client,
+  organismes,
+  insurerId,
+  onChangeInsurer,
+}: {
+  /** Lues seulement : le partage se calcule dessus. */
+  lines: CartLine[];
+  paymentMethod: PaymentMethod | null;
+  onChangePaymentMethod: (method: PaymentMethod) => void;
+  /** Cash handed over, in MAD. 0 means "nothing entered yet". */
+  cashReceived: number;
+  onChangeCashReceived: (amount: number) => void;
+  onValidate: () => void;
+  isSubmitting: boolean;
+  canValidate: boolean;
+  /**
+   * Le client attaché à la vente, `null` pour un client de passage. Il
+   * porte le solde et le plafond, dont dépend l'avertissement de
+   * dépassement, et l'affiliation, qui pré-remplit le tiers payant.
+   */
+  client: SelectedClient;
+  /** Les organismes actifs de l'officine. Vide = aucun conventionnement. */
+  organismes: OrganismeRecord[];
+  insurerId: string | null;
+  onChangeInsurer: (insurerId: string | null) => void;
+}) {
+  const total = computeCartTotal(lines);
+  /** Credit is only offered with a client attached — nobody to bill otherwise. */
+  const hasClient = client !== null;
+
+  // Le sélecteur n'apparaît que s'il y a de quoi rembourser : le proposer
+  // sur un panier de parapharmacie promettrait une prise en charge que le
+  // calcul refuserait ensuite.
+  const proposerTiersPayant =
+    contientRemboursable(lines) && organismes.length > 0;
+  const organisme = organismes.find((o) => o.id === insurerId) ?? null;
+  const partage = calculerPartage(
+    lines,
+    proposerTiersPayant && organisme ? organisme.tauxCouverture : null,
+  );
+
+  /**
+   * Seule la part client passe en caisse. La monnaie, les montants
+   * rapides et le contrôle « le compte y est-il » portent donc sur elle,
+   * jamais sur le total : le reste sera réclamé à l'organisme, pas au
+   * client qui est devant le comptoir.
+   */
+  const aEncaisser = partage.partClient;
+
+  /**
+   * Le dépassement porte sur le **total**, pas sur la part client : c'est
+   * le total que lib/server/sales.ts porte au compte sur une vente à
+   * crédit (`creditSaleMovement(totalAmount)`). Avertir sur un montant
+   * plus faible que celui réellement débité minimiserait le risque au
+   * moment précis où le pharmacien décide.
+   */
+  const depassement =
+    paymentMethod === "CREDIT" && client
+      ? depassementPlafondCredit({
+          solde: client.solde,
+          plafondCredit: client.plafondCredit,
+          montantACrediter: total,
+        })
+      : null;
+  const quickAmounts = quickCashAmounts(aEncaisser);
+
+  return (
+    <div className="flex flex-col gap-sp-md">
+      {proposerTiersPayant && (
+        <div className="space-y-sp-xs">
+          <label
+            htmlFor="organisme-vente"
+            className="block text-sm font-medium text-muted-foreground"
+          >
+            Tiers payant
+          </label>
+          <Select
+            value={insurerId ?? AUCUN_ORGANISME}
+            onValueChange={(valeur) =>
+              onChangeInsurer(valeur === AUCUN_ORGANISME ? null : valeur)
+            }
+          >
+            <SelectTrigger id="organisme-vente" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={AUCUN_ORGANISME}>
+                — Aucun (le client paie tout) —
+              </SelectItem>
+              {organismes.map((o) => (
+                <SelectItem key={o.id} value={o.id}>
+                  {o.nom} — {o.tauxCouverture} %
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* L'immatriculation vient de la fiche client et s'affiche en
+              rappel : c'est elle que l'organisme rapprochera sur le
+              bordereau, et une vente saisie sous un numéro absent revient
+              en rejet des semaines plus tard. Elle n'est pas modifiable
+              ici — la table `sales` n'a pas de colonne où loger une
+              valeur propre à une vente. */}
+          {client?.numeroImmatriculation && insurerId !== null && (
+            <p className="text-xs text-muted-foreground">
+              Immatriculation {client.name} :{" "}
+              <span className="font-medium text-foreground">
+                {client.numeroImmatriculation}
+              </span>
+            </p>
+          )}
         </div>
+      )}
+      {/* Plus de `sticky` : ce bloc occupe désormais sa propre colonne, et
+          c'est la colonne entière qui reste en vue pendant que le panier
+          défile à gauche. Un pied collant flottait au-dessus des lignes
+          qu'il n'avait pas encore dépassées — il grandissait à chaque
+          ajout, et recouvrait le panier d'autant. */}
+      <div className="space-y-sp-md rounded-xl bg-card p-sp-md shadow-card">
+        {/* Les deux montants séparés, et seulement quand il y a vraiment
+            deux montants : sur une vente ordinaire, une ligne « part
+            organisme : 0,00 » serait du bruit à chaque passage en caisse. */}
+        {partage.partAssurance > 0 ? (
+          <div className="space-y-sp-xs">
+            <div className="flex items-baseline justify-between text-sm text-muted-foreground">
+              <span>Total de la vente</span>
+              <span className="tabular-nums">{formatMoney(total)} MAD</span>
+            </div>
+            <div className="flex items-baseline justify-between text-sm">
+              <span className="text-muted-foreground">
+                Part {organisme?.nom ?? "organisme"} — à réclamer
+              </span>
+              <span className="tabular-nums text-muted-foreground">
+                −{formatMoney(partage.partAssurance)} MAD
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between border-t border-border pt-sp-xs">
+              <span className="text-lg font-medium text-muted-foreground">
+                À encaisser
+              </span>
+              <span className="font-heading text-4xl font-extrabold tabular-nums text-foreground">
+                {formatMoney(aEncaisser)}
+                <span className="ml-sp-xs text-lg font-bold">MAD</span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-baseline justify-between">
+            <span className="text-lg font-medium text-muted-foreground">
+              Total
+            </span>
+            <span className="font-heading text-4xl font-extrabold tabular-nums text-foreground">
+              {formatMoney(total)}
+              <span className="ml-sp-xs text-lg font-bold">MAD</span>
+            </span>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-sp-sm">
           <Button
@@ -196,13 +424,44 @@ export function CartPanel({
             variant={paymentMethod === "CREDIT" ? "default" : "outline"}
             className="col-span-2 h-16 text-base"
             disabled={!hasClient}
-            title={hasClient ? undefined : "Associez un client pour vendre à crédit"}
+            title={
+              hasClient ? undefined : "Associez un client pour vendre à crédit"
+            }
             onClick={() => onChangePaymentMethod("CREDIT")}
           >
             <UserRound className="size-5" />
-            {hasClient ? "Crédit client (à payer plus tard)" : "Crédit client — associez un client"}
+            {hasClient
+              ? "Crédit client (à payer plus tard)"
+              : "Crédit client — associez un client"}
           </Button>
         </div>
+
+        {/* Avertir, jamais bloquer : le plafond est une consigne de
+            gestion, et c'est le pharmacien, qui a le client devant lui,
+            qui décide. Le bouton de validation reste actif — mais
+            l'alerte est en rouge, au-dessus de lui, et impossible à
+            manquer. */}
+        {depassement && (
+          <div
+            role="alert"
+            className="flex items-start gap-sp-sm rounded-lg border border-destructive/40 bg-destructive/10 p-sp-md text-sm text-destructive"
+          >
+            <AlertTriangle className="mt-0.5 size-5 shrink-0" />
+            <div className="space-y-0.5">
+              <p className="font-semibold">
+                Plafond de crédit dépassé de{" "}
+                {formatMoney(depassement.depassement)} MAD
+              </p>
+              <p className="text-destructive/90">
+                {client?.name} doit déjà{" "}
+                {formatMoney(depassement.encoursActuel)} MAD ; cette vente
+                porterait son encours à {formatMoney(depassement.encoursApres)}{" "}
+                MAD, pour un plafond de {formatMoney(depassement.plafond)} MAD.
+                La vente reste possible.
+              </p>
+            </div>
+          </div>
+        )}
 
         {paymentMethod === "CASH" && (
           <div className="space-y-sp-sm">
@@ -219,7 +478,9 @@ export function CartPanel({
               step="0.01"
               inputMode="decimal"
               value={cashReceived === 0 ? "" : cashReceived}
-              onChange={(event) => onChangeCashReceived(Number(event.target.value) || 0)}
+              onChange={(event) =>
+                onChangeCashReceived(Number(event.target.value) || 0)
+              }
               placeholder="0,00"
               className="h-14 w-full rounded-lg bg-muted/60 px-sp-md text-right font-heading text-2xl font-bold tabular-nums text-foreground outline-none transition-colors focus:bg-muted focus:ring-2 focus:ring-ring"
             />
@@ -246,7 +507,7 @@ export function CartPanel({
               ))}
             </div>
 
-            <ChangeDisplay total={total} received={cashReceived} />
+            <ChangeDisplay total={aEncaisser} received={cashReceived} />
           </div>
         )}
 

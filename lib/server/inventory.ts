@@ -300,6 +300,12 @@ export async function applyInventoryAdjustments(input: ApplyInventoryInput): Pro
 }
 
 export type InventorySessionSummary = InventorySessionRecord & {
+  /**
+   * Carried so a device that pulls this session down can file it under the
+   * pharmacy it belongs to — the local store is indexed by `pharmacyId`,
+   * and a session missing it would be invisible to every screen.
+   */
+  pharmacyId: string;
   /** Products in the session, and how many have been counted. */
   totalCount: number;
   countedCount: number;
@@ -331,6 +337,7 @@ export async function listInventorySessions(): Promise<InventorySessionSummary[]
     );
     return {
       ...toRecord(session),
+      pharmacyId: session.pharmacyId,
       totalCount: session.counts.length,
       countedCount: session.counts.filter((count) => count.quantiteComptee !== null).length,
       varianceCount: varianceLines.length,
@@ -344,6 +351,53 @@ export async function listInventorySessions(): Promise<InventorySessionSummary[]
         ) / 100,
     };
   });
+}
+
+export type InventoryCountLine = {
+  id: string;
+  productId: string;
+  productName: string;
+  quantiteTheorique: number;
+  /**
+   * The catalogue price as it stands *now*. A session counted on this
+   * device freezes the price when it opens; the server has never stored
+   * that figure, so a session pulled down onto another device values its
+   * variance at today's price. Same compromise `listInventorySessions`
+   * already makes for `varianceValue` — worth knowing when the two
+   * devices disagree by a few dirhams on an old count.
+   */
+  unitPrice: number;
+  quantiteComptee: number | null;
+  dateComptage: Date | null;
+};
+
+/**
+ * Every line of one session, so the offline layer can rebuild it locally.
+ *
+ * Scoped through the session's own pharmacy rather than by id alone: a
+ * session id guessed or kept from a previous employer must not open
+ * another pharmacy's count.
+ */
+export async function listInventorySessionCounts(
+  sessionId: string,
+): Promise<InventoryCountLine[]> {
+  const user = await requireUser();
+
+  const counts = await prisma.inventoryCount.findMany({
+    where: { sessionId, session: { pharmacyId: user.pharmacyId } },
+    include: { product: { select: { name: true, price: true } } },
+    orderBy: { product: { name: "asc" } },
+  });
+
+  return counts.map((count) => ({
+    id: count.id,
+    productId: count.productId,
+    productName: count.product.name,
+    quantiteTheorique: count.quantiteTheorique,
+    unitPrice: Number(count.product.price),
+    quantiteComptee: count.quantiteComptee,
+    dateComptage: count.dateComptage,
+  }));
 }
 
 function toRecord(session: {

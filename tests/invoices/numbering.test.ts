@@ -14,6 +14,7 @@ import { formatInvoiceNumber, parseInvoiceNumber } from "@/lib/invoices/numberin
  * demonstrates the fake really does catch that.
  */
 const state = vi.hoisted(() => ({
+  journal: [] as Record<string, unknown>[],
   counters: new Map<string, number>(),
   invoices: [] as Array<{ id: string; number: string; year: number; sequence: number; status: string }>,
   pharmacy: { name: "Pharmacie Test", address: "12 rue X", phone: "0600", ice: "ICE1" },
@@ -115,6 +116,21 @@ function makeTx() {
         return { id: invoice.id, number: invoice.number };
       },
     },
+    // Ajouté avec la journalisation. Le journal est en ajout seul,
+    // garanti par un déclencheur en base : le faux refuse donc les deux
+    // autres opérations, comme la base le ferait.
+    eventLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        state.journal.push({ ...data });
+        return data;
+      },
+      update: async () => {
+        throw new Error("event_log est un journal en ajout seul : UPDATE refuse.");
+      },
+      delete: async () => {
+        throw new Error("event_log est un journal en ajout seul : DELETE refuse.");
+      },
+    },
   };
 }
 
@@ -159,6 +175,7 @@ function seedSales(count: number) {
 beforeEach(() => {
   state.counters = new Map();
   state.invoices = [];
+  state.journal = [];
   seedSales(50);
 });
 
@@ -271,5 +288,46 @@ describe("sequential numbering under concurrency", () => {
     const numbers = await Promise.all(Array.from({ length: 20 }, racy));
 
     expect(new Set(numbers).size).toBeLessThan(20);
+  });
+});
+
+/**
+ * La journalisation de la facturation.
+ *
+ * Ajoutée à côté de la numérotation, jamais dedans : les assertions de
+ * concurrence ci-dessus — 50 factures simultanées, aucun trou dans la
+ * séquence, aucun numéro réutilisé — portent sur le mécanisme que la
+ * trace ne doit pas perturber, et elles passent inchangées.
+ */
+describe("journalisation d'une facture", () => {
+  it("écrit une entrée du bon type, avec le numéro attribué", async () => {
+    const facture = await createInvoiceFromSales(["sale-1", "sale-2"]);
+
+    expect(state.journal).toHaveLength(1);
+    const trace = state.journal[0]!;
+    expect(trace.typeAction).toBe("facture.generee");
+    expect(trace.entite).toBe("facture");
+    expect(trace.entiteId).toBe(facture.id);
+    // Le numéro dans l'instantané : il n'est jamais réattribué, et c'est
+    // par lui qu'on retrouve une facture des mois plus tard.
+    expect((trace.apres as { nom: string }).nom).toBe(facture.number);
+    expect((trace.apres as { ventes: number }).ventes).toBe(2);
+  });
+
+  it("n'écrit rien quand la facturation est refusée", async () => {
+    // La trace est dans la transaction : une facture refusée ne consomme
+    // pas de numéro, et ne doit pas laisser de trace non plus.
+    await expect(createInvoiceFromSales([])).rejects.toThrow();
+    expect(state.journal).toHaveLength(0);
+  });
+
+  it("écrit une entrée par facture, jamais une de plus", async () => {
+    await createInvoiceFromSales(["sale-1"]);
+    await createInvoiceFromSales(["sale-2"]);
+    expect(state.journal).toHaveLength(2);
+    expect(state.journal.map((e) => e.typeAction)).toEqual([
+      "facture.generee",
+      "facture.generee",
+    ]);
   });
 });

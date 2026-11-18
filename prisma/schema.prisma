@@ -11,21 +11,41 @@ datasource db {
 }
 
 model Pharmacy {
-  id              String   @id @default(uuid())
-  name            String
-  address         String?
-  phone           String?
+  id                String  @id @default(uuid())
+  name              String
+  address           String?
+  phone             String?
   /// ICE (Identifiant Commun de l'Entreprise) — Moroccan business registry number.
-  ice             String?
-  orderNumber     String?  @map("order_number")
-  logoUrl         String?  @map("logo_url")
+  ice               String?
+  /// IF — Identifiant Fiscal, le numéro sous lequel l'officine est connue de
+  /// la DGI. Distinct de l'ICE, qui est un identifiant d'entreprise : c'est
+  /// l'IF que porte le QR code des factures.
+  identifiantFiscal String? @map("identifiant_fiscal")
+
+  /// Le titulaire autorise-t-il un assistant à clôturer la caisse ?
+  /// Désactivé par défaut : la clôture arrête la journée comptable, et
+  /// c'est une responsabilité de titulaire tant qu'il n'en décide pas
+  /// autrement.
+  clotureAssistantAutorisee Boolean  @default(false) @map("cloture_assistant_autorisee")
+  /// Le PIN de clôture, haché avec scrypt — jamais en clair. Nul tant que
+  /// le titulaire n'en a pas défini.
+  cloturePinHash            String?  @map("cloture_pin_hash")
+  orderNumber               String?  @map("order_number")
+  /// INPE — Identifiant National du Praticien et de l'Établissement.
+  /// Identifie l'officine auprès des organismes de tiers payant ; il figure
+  /// sur les bordereaux qu'on leur adresse.
+  inpe                      String?
+  /// N° de patente — la taxe professionnelle de l'officine. Figure sur les
+  /// bordereaux adressés aux organismes, au même titre que l'ICE et l'INPE.
+  patente                   String?
+  logoUrl                   String?  @map("logo_url")
   /// Free-form receipt customization: { showLogo, legalNotice, thankYouMessage }.
-  receiptSettings Json?    @map("receipt_settings")
+  receiptSettings           Json?    @map("receipt_settings")
   /// Dirhams that earn one loyalty point. 1 means "1 DH = 1 point";
   /// raising it makes points scarcer. Never 0 — see lib/clients/account.ts.
-  loyaltyRate     Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  loyaltyRate               Decimal  @default(1) @map("loyalty_rate") @db.Decimal(10, 2)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
 
   users              User[]
   products           Product[]
@@ -44,6 +64,11 @@ model Pharmacy {
   supplierCredits    SupplierCredit[]
 
   inventorySessions InventorySession[]
+
+  pharmacyStock  PharmacyStock[]
+  organismes     OrganismeTiersPayant[]
+  bordereaus     Bordereau[]
+  caisseSessions CaisseSession[]
 
   @@map("pharmacies")
 }
@@ -72,44 +97,69 @@ model User {
   saleReturns         SaleReturn[]
   publicationLectures PublicationLecture[]
   inventorySessions   InventorySession[]
+  caissesOuvertes     CaisseSession[]      @relation("CaisseOuvertePar")
+  caissesFermees      CaisseSession[]      @relation("CaisseFermeePar")
 
   @@index([pharmacyId])
   @@map("users")
 }
 
 model Product {
-  id                String    @id @default(uuid())
-  pharmacyId        String    @map("pharmacy_id")
-  name              String
-  form              String
-  dosage            String?
-  laboratory        String?
-  barcode           String?
-  dci               String?
-  photoUrl          String?   @map("photo_url")
+  id                 String    @id @default(uuid())
+  pharmacyId         String    @map("pharmacy_id")
+  name               String
+  form               String
+  dosage             String?
+  laboratory         String?
+  barcode            String?
+  dci                String?
+  photoUrl           String?   @map("photo_url")
   /// One of the fixed values in PRODUCT_CATEGORIES (lib/validations/products.ts).
-  category          String?
+  category           String?
   /// Selling price used at the point of sale.
-  price             Decimal   @default(0) @db.Decimal(10, 2)
+  price              Decimal   @default(0) @db.Decimal(10, 2)
   /// Purchase/cost price — used to compute gross margin (price - purchasePrice) on sales reporting.
-  purchasePrice     Decimal?  @map("purchase_price") @db.Decimal(10, 2)
+  purchasePrice      Decimal?  @map("purchase_price") @db.Decimal(10, 2)
   /// Prix Public Hospitalier — regulated reference price, separate from `price`.
-  pph               Decimal?  @db.Decimal(10, 2)
-  tvaVente          Decimal?  @map("tva_vente") @db.Decimal(5, 2)
-  tvaAchat          Decimal?  @map("tva_achat") @db.Decimal(5, 2)
-  lowStockThreshold Int       @default(0) @map("low_stock_threshold")
-  quantityInStock   Int       @default(0) @map("quantity_in_stock")
-  nearestExpiryDate DateTime? @map("nearest_expiry_date")
-  remboursable      Boolean   @default(false)
+  pph                Decimal?  @db.Decimal(10, 2)
+  tvaVente           Decimal?  @map("tva_vente") @db.Decimal(5, 2)
+  tvaAchat           Decimal?  @map("tva_achat") @db.Decimal(5, 2)
+  lowStockThreshold  Int       @default(0) @map("low_stock_threshold")
+  quantityInStock    Int       @default(0) @map("quantity_in_stock")
+  nearestExpiryDate  DateTime? @map("nearest_expiry_date")
+  remboursable       Boolean   @default(false)
   /// Only meaningful when `remboursable` is true.
-  baseRemboursement Decimal?  @map("base_remboursement") @db.Decimal(10, 2)
-  posologieEnfant   String?   @map("posologie_enfant")
-  posologieAdulte   String?   @map("posologie_adulte")
-  monographie       String?
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  baseRemboursement  Decimal?  @map("base_remboursement") @db.Decimal(10, 2)
+  posologieEnfant    String?   @map("posologie_enfant")
+  posologieAdulte    String?   @map("posologie_adulte")
+  monographie        String?
+  /// La fiche catalogue nationale dont ce produit est issu, quand il a été
+  /// ajouté depuis le catalogue. Nul pour les produits saisis à la main
+  /// avant — ou après — cette bascule : le champ relie, il n'impose pas.
+  ///
+  /// `products` reste la table opérationnelle (quantité, prix pratiqué,
+  /// ventes, réceptions, inventaire). Ce lien est ce qui permet à la fiche
+  /// produit d'afficher les informations catalogue en lecture seule, et il
+  /// prépare la bascule complète des lectures — voir docs/migration-catalogue.md.
+  catalogueProduitId String?   @map("catalogue_produit_id")
+  /// Désactivé par l'officine, pour elle seule : le produit disparaît du
+  /// comptoir et des commandes fournisseur, mais reste au stock avec ses
+  /// lots, ses mouvements et ses ventes passées. Toujours réversible.
+  ///
+  /// Distinct de `CatalogueProduit.actifCatalogue`, qui est national et
+  /// n'appartient qu'à l'Admin. Porté ici plutôt que sur `pharmacy_stock`
+  /// parce que c'est `products` que lisent toutes les lectures
+  /// opérationnelles — et parce qu'un produit saisi à la main n'a pas de
+  /// ligne `pharmacy_stock` : le drapeau y serait resté hors d'atteinte
+  /// pour la moitié du stock.
+  actifLocalement    Boolean   @default(true) @map("actif_localement")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   pharmacy        Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  /// `SetNull` plutôt que `Cascade` : retirer une fiche du catalogue ne doit
+  /// jamais faire disparaître le stock d'une officine ni ses ventes passées.
+  catalogue       CatalogueProduit?    @relation(fields: [catalogueProduitId], references: [id], onDelete: SetNull)
   stockMovements  StockMovement[]
   saleItems       SaleItem[]
   orderItems      OrderItem[]
@@ -121,7 +171,60 @@ model Product {
 
   @@unique([pharmacyId, barcode])
   @@index([pharmacyId])
+  @@index([catalogueProduitId])
   @@map("products")
+}
+
+/// Une session de caisse : de l'ouverture du matin au Journal Z du soir.
+enum StatutCaisseSession {
+  OUVERTE  @map("ouverte")
+  CLOTUREE @map("cloturee")
+
+  @@map("statut_caisse_session")
+}
+
+model CaisseSession {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+
+  ouvertePar        String              @map("ouverte_par")
+  fondCaisseInitial Decimal             @default(0) @map("fond_caisse_initial") @db.Decimal(10, 2)
+  dateOuverture     DateTime            @default(now()) @map("date_ouverture")
+  statut            StatutCaisseSession @default(OUVERTE)
+
+  fermeePar     String?   @map("fermee_par")
+  dateFermeture DateTime? @map("date_fermeture")
+
+  /// Fond initial + espèces encaissées sur la session. Calculé à la
+  /// clôture et figé : le recalculer plus tard donnerait un autre chiffre
+  /// dès qu'une vente en retard est rattachée.
+  especesTheoriques Decimal? @map("especes_theoriques") @db.Decimal(10, 2)
+  /// Ce que le tiroir contenait vraiment, compté à l'aveugle.
+  especesReelles    Decimal? @map("especes_reelles") @db.Decimal(10, 2)
+  /// Réel moins théorique. Négatif = il manque de l'argent.
+  ecartCaisse       Decimal? @map("ecart_caisse") @db.Decimal(10, 2)
+
+  /// Z-AAAA-MM-JJ-NNN, attribué à la clôture seulement. Une session
+  /// ouverte n'a pas de numéro : il n'y a encore rien à archiver.
+  numeroZ String? @map("numero_z")
+
+  /// Clôture faite par un assistant au moyen du code PIN. Visible dans
+  /// l'historique : le titulaire doit toujours distinguer qui a vraiment
+  /// arrêté la caisse.
+  fermetureParPin Boolean @default(false) @map("fermeture_par_pin")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  ouvreur  User     @relation("CaisseOuvertePar", fields: [ouvertePar], references: [id], onDelete: Restrict)
+  fermeur  User?    @relation("CaisseFermeePar", fields: [fermeePar], references: [id], onDelete: SetNull)
+  ventes   Sale[]
+
+  @@unique([pharmacyId, numeroZ])
+  @@index([pharmacyId, statut])
+  @@index([pharmacyId, dateOuverture])
+  @@map("caisse_sessions")
 }
 
 enum StockMovementType {
@@ -148,11 +251,47 @@ model StockMovement {
   @@map("stock_movements")
 }
 
+/// Le rapport de l'officine au client. « Occasionnel » par défaut : c'est
+/// ce qu'est un client créé au comptoir en pleine vente, et le titulaire
+/// requalifie ensuite depuis la fiche.
+enum TypeClient {
+  REGULIER      @map("regulier")
+  OCCASIONNEL   @map("occasionnel")
+  PROFESSIONNEL @map("professionnel")
+
+  @@map("type_client")
+}
+
 model Client {
-  id             String  @id @default(uuid())
-  pharmacyId     String  @map("pharmacy_id")
-  name           String
-  phone          String?
+  id         String     @id @default(uuid())
+  pharmacyId String     @map("pharmacy_id")
+  name       String
+  phone      String?
+  email      String?
+  typeClient TypeClient @default(OCCASIONNEL) @map("type_client")
+
+  /// Données personnelles au sens de la loi 09-08 : leur consultation et
+  /// leur modification sont journalisées dans `event_log`, sous les
+  /// actions `client.consultation` et `client.modifie`.
+  cin             String?
+  medecinTraitant String? @map("medecin_traitant")
+
+  adresse    String?
+  codePostal String? @map("code_postal")
+  ville      String?
+  pays       String? @default("Maroc")
+
+  /// Immatriculation AMO/CNSS/CNOPS ou assurance privée, et l'organisme
+  /// qui la reconnaît. L'organisme est une relation, jamais un libellé
+  /// libre : le même « CNSS » écrit à la main sur mille fiches ne se
+  /// rapproche d'aucun bordereau.
+  numeroImmatriculation String? @map("numero_immatriculation")
+  insurerId             String? @map("insurer_id")
+
+  /// Encours maximal autorisé en vente à crédit, fixé par le titulaire.
+  /// Nul = pas de plafond. Il avertit, il ne bloque pas : c'est le
+  /// pharmacien qui décide en dernier ressort, devant le client.
+  plafondCredit  Decimal? @map("plafond_credit") @db.Decimal(12, 2)
   /// Running account balance. NEGATIVE means the client owes the pharmacy
   /// (credit sale), POSITIVE means the pharmacy owes the client.
   ///
@@ -160,18 +299,20 @@ model Client {
   /// one database transaction — see recordClientTransaction() in
   /// lib/server/client-account.ts, the single writer. It must always equal
   /// the sum of the client's transaction amounts.
-  solde          Decimal @default(0) @db.Decimal(12, 2)
-  pointsFidelite Int     @default(0) @map("points_fidelite")
+  solde          Decimal  @default(0) @db.Decimal(12, 2)
+  pointsFidelite Int      @default(0) @map("points_fidelite")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  pharmacy     Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  pharmacy     Pharmacy              @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  insurer      OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
   sales        Sale[]
   transactions ClientTransaction[]
   reminders    ClientReminder[]
 
   @@index([pharmacyId])
+  @@index([insurerId])
   @@map("clients")
 }
 
@@ -268,11 +409,41 @@ model Sale {
   /// line of every sale.
   returnStatus SaleReturnStatus @default(NONE) @map("return_status")
 
-  pharmacy           Pharmacy            @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
-  client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  user               User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Tiers payant. `insurerId` nul = vente payée intégralement par le client.
+  insurerId String? @map("insurer_id")
+
+  /// La répartition du `totalAmount`, figée au moment de la vente.
+  ///
+  /// Les deux montants sont stockés plutôt que recalculés : le taux d'un
+  /// organisme change avec les conventions, et une vente de l'an dernier
+  /// doit rester lisible avec le taux qui s'appliquait ce jour-là.
+  ///
+  /// Invariant : `montantPartClient + montantPartAssurance == totalAmount`,
+  /// au centime près. C'est la part client qui est obtenue par
+  /// soustraction — voir lib/pos/tiers-payant.ts — de sorte qu'aucun
+  /// arrondi ne puisse creuser d'écart.
+  montantPartClient    Decimal @default(0) @map("montant_part_client") @db.Decimal(10, 2)
+  montantPartAssurance Decimal @default(0) @map("montant_part_assurance") @db.Decimal(10, 2)
+
+  statutCreance StatutCreance @default(AUCUNE) @map("statut_creance")
+
+  /// La session de caisse à laquelle la vente est rattachée. Nulle pour
+  /// les ventes antérieures au module.
+  caisseSessionId   String? @map("caisse_session_id")
+  /// Vente hors ligne synchronisée après la clôture de sa journée. Elle
+  /// est rattachée à la session ouverte du moment, pas à la sienne : une
+  /// session close ne se rouvre jamais. Le drapeau dit que le Z où elle
+  /// figure n'est pas celui de sa date réelle.
+  rattrapageOffline Boolean @default(false) @map("rattrapage_offline")
+
+  pharmacy           Pharmacy              @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  client             Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  user               User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   items              SaleItem[]
-  invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoice            Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  insurer            OrganismeTiersPayant? @relation(fields: [insurerId], references: [id], onDelete: SetNull)
+  caisseSession      CaisseSession?        @relation(fields: [caisseSessionId], references: [id], onDelete: SetNull)
+  bordereauLignes    BordereauVente[]
   returns            SaleReturn[]
   clientTransactions ClientTransaction[]
 
@@ -280,19 +451,36 @@ model Sale {
   @@index([clientId])
   @@index([userId])
   @@index([invoiceId])
+  /// Le filtre de la page Ventes : « quelles créances attendent un bordereau ».
+  @@index([pharmacyId, statutCreance])
+  @@index([caisseSessionId])
   @@map("sales")
 }
 
 model SaleItem {
-  id               String  @id @default(uuid())
-  pharmacyId       String  @map("pharmacy_id")
-  saleId           String  @map("sale_id")
-  productId        String  @map("product_id")
-  quantity         Int
-  unitPrice        Decimal @map("unit_price") @db.Decimal(10, 2)
+  id         String  @id @default(uuid())
+  pharmacyId String  @map("pharmacy_id")
+  saleId     String  @map("sale_id")
+  productId  String  @map("product_id")
+  quantity   Int
+  unitPrice  Decimal @map("unit_price") @db.Decimal(10, 2)
+
+  /// Le tiers payant de cette ligne, figé au moment de la vente.
+  ///
+  /// Instantanés, et non des lectures du produit : la base de
+  /// remboursement et le taux de l'organisme changent avec les
+  /// conventions, et une vente de l'an dernier doit rester lisible avec les
+  /// valeurs qui s'appliquaient ce jour-là. La fiche affichait jusqu'ici la
+  /// base ACTUELLE du produit, ce qui devenait faux à la première
+  /// correction du catalogue.
+  ///
+  /// Nuls sur les ventes antérieures à ces colonnes : la fiche retombe
+  /// alors sur l'ancien affichage, faute de mieux.
+  baseRemboursement    Decimal? @map("base_remboursement") @db.Decimal(10, 2)
+  montantPartAssurance Decimal  @default(0) @map("montant_part_assurance") @db.Decimal(10, 2)
   /// Cumulative quantity returned so far across one or more returns —
   /// the cap that stops a line being refunded more than it was sold.
-  returnedQuantity Int     @default(0) @map("returned_quantity")
+  returnedQuantity     Int      @default(0) @map("returned_quantity")
 
   pharmacy    Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   sale        Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -317,6 +505,8 @@ model Supplier {
   pharmacy Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
   orders   Order[]
   credits  SupplierCredit[]
+
+  pharmacyStock PharmacyStock[]
 
   @@index([pharmacyId])
   @@map("suppliers")
@@ -628,10 +818,15 @@ model Invoice {
   status     InvoiceStatus @default(ISSUED)
   issuedAt   DateTime      @default(now()) @map("issued_at")
 
-  pharmacyName    String  @map("pharmacy_name")
-  pharmacyAddress String? @map("pharmacy_address")
-  pharmacyPhone   String? @map("pharmacy_phone")
-  pharmacyIce     String? @map("pharmacy_ice")
+  pharmacyName              String  @map("pharmacy_name")
+  pharmacyAddress           String? @map("pharmacy_address")
+  pharmacyPhone             String? @map("pharmacy_phone")
+  pharmacyIce               String? @map("pharmacy_ice")
+  /// Recopié à l'émission, comme les autres coordonnées : une facture doit
+  /// porter l'identifiant fiscal qui était celui de l'officine ce jour-là.
+  /// Le relire sur la pharmacie ferait changer le contenu du QR code d'une
+  /// facture déjà remise à un client.
+  pharmacyIdentifiantFiscal String? @map("pharmacy_identifiant_fiscal")
 
   /// Kept as a plain snapshot alongside the id: the same invoice format
   /// serves individuals, insurers and companies, so no client type here.
@@ -791,4 +986,474 @@ model InventoryCount {
   @@index([sessionId])
   @@index([productId])
   @@map("inventory_counts")
+}
+
+// ---------------------------------------------------------------------------
+// Catalogue Produits — PRD "Akribis — Catalogue Produits" v1.0, section 5.
+//
+// Le produit est scindé en trois niveaux, conformément à la section 4 : ce qui
+// est vrai partout au Maroc (CatalogueProduit), ce qui appartient à une
+// officine (PharmacyStock), et ce qui appartient à une réception précise
+// (ProductLot).
+//
+// Ces tables vivent EN PARALLÈLE de `products`, qui reste la source de vérité
+// du code applicatif à ce stade. Voir docs/migration-catalogue.md.
+// ---------------------------------------------------------------------------
+
+/// Section 5.1 — « Catégorie ». À ne pas confondre avec la classe
+/// thérapeutique : celle-ci dit à quoi le produit sert, celle-là ce qu'il est
+/// juridiquement — et détermine le taux de TVA (7 % médicament, 20 % para).
+enum ProduitCategorie {
+  PHARMACEUTIQUE     @map("pharmaceutique")
+  PARAPHARMACEUTIQUE @map("parapharmaceutique")
+  DISPOSITIF_MEDICAL @map("dispositif_medical")
+
+  @@map("produit_categorie")
+}
+
+/// Section 3.2 — tableaux des substances vénéneuses (classification légale
+/// marocaine). `AUCUN` couvre la délivrance libre.
+enum TableauSubstance {
+  AUCUN @map("aucun")
+  A     @map("a")
+  B     @map("b")
+  C     @map("c")
+
+  @@map("tableau_substance")
+}
+
+/// Niveau national, maintenu par Akribis. Volontairement SANS `pharmacyId` :
+/// une seule ligne par produit, partagée par toutes les officines — c'est tout
+/// l'objet du PRD.
+model CatalogueProduit {
+  id String @id @default(uuid())
+
+  // --- Identification et classification (5.1) ---
+  nom                   String
+  /// CBO/CIP 13 chiffres (médicament) ou EAN-13/UPC (parapharmacie). Unique au
+  /// niveau national : c'est l'identifiant qui empêche deux fiches pour le
+  /// même produit. Nul tant qu'un produit n'en a pas — la parapharmacie
+  /// n'a pas de code national.
+  codeBarres            String?           @unique @map("code_barres")
+  /// Absent de la liste 5.1, où le dosage fait partie du « Nom ». Conservé
+  /// parce que `products.dosage` existe déjà et que le référentiel CNOPS le
+  /// fournit séparément (DOSAGE1/UNITE_DOSAGE1) — le fusionner dans le nom
+  /// perdrait de l'information à la migration.
+  dosage                String?
+  /// Nul pour les produits migrés depuis `products`, où l'information
+  /// n'existait pas : « à classer » plutôt qu'une valeur inventée dont
+  /// dépendrait le taux de TVA.
+  categorie             ProduitCategorie?
+  classeTherapeutique   String?           @map("classe_therapeutique")
+  formeGalenique        String            @map("forme_galenique")
+  dci                   String?
+  laboratoire           String?
+  produitTableau        TableauSubstance  @default(AUCUN) @map("produit_tableau")
+  gamme                 String?
+  sousGamme             String?           @map("sous_gamme")
+  necessitePrescription Boolean           @default(false) @map("necessite_prescription")
+  /// Statut réglementaire national : le produit est-il encore autorisé à la
+  /// vente au Maroc. Distinct de `actifLocalement` côté officine.
+  produitCommercialise  Boolean           @default(true) @map("produit_commercialise")
+  groupeProduits        String?           @map("groupe_produits")
+  /// Marque commerciale. Distincte de `laboratoire` : en parapharmacie
+  /// c'est la marque qui identifie le produit au rayon, pas le fabricant.
+  marque                String?
+  /// Hiérarchie de RAYON, pour naviguer et filtrer le catalogue.
+  /// À ne pas confondre avec `gamme`/`sousGamme`, qui restent la ligne de
+  /// produit du laboratoire — deux découpages différents du même produit.
+  categoriePrincipale   String?           @map("categorie_principale")
+  sousCategorie         String?           @map("sous_categorie")
+  sousSousCategorie     String?           @map("sous_sous_categorie")
+  /// Mots-clés libres, pour la recherche.
+  etiquettes            String?
+  /// Retrait du catalogue sans suppression — la traçabilité impose de garder
+  /// la ligne, référencée par des ventes passées.
+  actifCatalogue        Boolean           @default(true) @map("actif_catalogue")
+  refrigerationRequise  Boolean           @default(false) @map("refrigeration_requise")
+
+  // --- Prix et fiscalité (5.1), non modifiables par la pharmacie ---
+  pph                   Decimal? @db.Decimal(10, 2)
+  ppv                   Decimal? @db.Decimal(10, 2)
+  /// PRIX_BR du référentiel CNOPS — un montant, pas un taux.
+  prixBaseRemboursement Decimal? @map("prix_base_remboursement") @db.Decimal(10, 2)
+  tvaAchat              Decimal? @map("tva_achat") @db.Decimal(5, 2)
+  tvaVente              Decimal? @map("tva_vente") @db.Decimal(5, 2)
+  remboursable          Boolean  @default(false)
+  /// « Base de remboursement (%) » — un taux (70 ou 0 dans le CNOPS 2014),
+  /// à ne pas confondre avec `prixBaseRemboursement` ci-dessus.
+  tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+  /// Prix de référence NON réglementé, pour la parapharmacie.
+  ///
+  /// À ne jamais confondre avec `ppv`, qui est le prix public réglementé
+  /// d'un médicament : ici le prix reste libre pour chaque officine une
+  /// fois la fiche recopiée dans son stock. Ce champ n'est qu'un point de
+  /// départ indicatif — c'est pourquoi il porte son propre nom plutôt que
+  /// de réutiliser `ppv`, qui aurait fait passer un prix libre pour un
+  /// prix encadré.
+  prixVenteIndicatif    Decimal? @map("prix_vente_indicatif") @db.Decimal(10, 2)
+
+  // --- Informations descriptives (5.1) ---
+  description                 String?
+  excipients                  String?
+  posologieAdulte             String? @map("posologie_adulte")
+  posologieEnfant             String? @map("posologie_enfant")
+  indications                 String?
+  /// Trois champs distincts, comme le demande le PRD : une contre-indication
+  /// à la conduite ne se déduit pas d'une contre-indication à la grossesse.
+  contreIndicationConduite    String? @map("contre_indication_conduite")
+  contreIndicationAllaitement String? @map("contre_indication_allaitement")
+  contreIndicationGrossesse   String? @map("contre_indication_grossesse")
+  referenceLabo               String? @map("reference_labo")
+  conditionnement             String?
+  monographie                 String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  stocks   PharmacyStock[]
+  photos   CatalogueProduitPhoto[]
+  produits Product[]
+
+  @@index([nom])
+  @@index([dci])
+  @@index([laboratoire])
+  @@map("catalogue_produits")
+}
+
+/// Photos d'une fiche catalogue, ordonnées. Une table plutôt qu'un tableau
+/// de textes : `ordre` porte la notion de photo principale (la plus basse),
+/// et une ligne par photo permet d'en supprimer une sans réécrire les
+/// autres — un tableau se remplace en entier à chaque modification.
+model CatalogueProduitPhoto {
+  id                 String   @id @default(uuid())
+  catalogueProduitId String   @map("catalogue_produit_id")
+  url                String
+  /// 0 = photo principale, celle qu'affichent les listes et le POS.
+  /// Volontairement sans contrainte d'unicité : réordonner par échange
+  /// passerait par un état transitoire à deux photos de même rang, qu'un
+  /// index unique non différé refuserait.
+  ordre              Int      @default(0)
+  dateAjout          DateTime @default(now()) @map("date_ajout")
+
+  catalogueProduit CatalogueProduit @relation(fields: [catalogueProduitId], references: [id], onDelete: Cascade)
+
+  /// Sert la requête « photo principale de ce produit ».
+  @@index([catalogueProduitId, ordre])
+  @@map("catalogue_produit_photos")
+}
+
+/// Section 5.2 — ce qu'une officine ajoute par-dessus une fiche catalogue.
+model PharmacyStock {
+  id                 String @id @default(uuid())
+  pharmacyId         String @map("pharmacy_id")
+  catalogueProduitId String @map("catalogue_produit_id")
+
+  /// Grossiste-répartiteur choisi par CETTE pharmacie pour CE produit.
+  supplierId       String?  @map("supplier_id")
+  stockMinimum     Int      @default(0) @map("stock_minimum")
+  stockMaximum     Int?     @map("stock_maximum")
+  dateAjout        DateTime @default(now()) @map("date_ajout")
+  referenceInterne String?  @map("reference_interne")
+  localisation     String?
+  actifLocalement  Boolean  @default(true) @map("actif_localement")
+  /// Parapharmacie uniquement : sans prix réglementé, le titulaire fixe son
+  /// prix de vente librement.
+  margeLibre       Decimal? @map("marge_libre") @db.Decimal(10, 2)
+  /// Absent de la liste 5.2, mais imposé par la section 9 : le prix d'achat
+  /// réellement facturé est propre à l'officine et doit être distingué du
+  /// PPH/PPV réglementés du catalogue. Sans ce champ, `products.purchasePrice`
+  /// serait perdu à la migration et le calcul de marge cesserait de
+  /// fonctionner.
+  prixAchat        Decimal? @map("prix_achat") @db.Decimal(10, 2)
+
+  // ------------------------------------------------------------------
+  // Copie complète et modifiable de la fiche catalogue (PRD 5.1).
+  //
+  // Correctif de conception : la phase 1 lisait ces champs à travers
+  // `catalogueProduitId`. Ils sont désormais DUPLIQUÉS ici, et l'officine
+  // les modifie sans jamais toucher au catalogue national — ni l'inverse.
+  // Les deux lignes partent identiques après le backfill puis divergent
+  // librement.
+  //
+  // Tout est nullable : la migration est additive sur une table déjà en
+  // service, et un NULL se lit « pas encore recopié depuis le catalogue »,
+  // ce qui rend le backfill rejouable sans écraser une saisie de la
+  // pharmacie. `codeBarres` n'est surtout PAS unique ici, contrairement au
+  // catalogue : deux officines stockent le même produit.
+  // ------------------------------------------------------------------
+
+  // --- Identification ---
+  nom                   String?
+  codeBarres            String?           @map("code_barres")
+  dosage                String?
+  categorie             ProduitCategorie?
+  classeTherapeutique   String?           @map("classe_therapeutique")
+  formeGalenique        String?           @map("forme_galenique")
+  dci                   String?
+  laboratoire           String?
+  produitTableau        TableauSubstance? @map("produit_tableau")
+  gamme                 String?
+  sousGamme             String?           @map("sous_gamme")
+  necessitePrescription Boolean?          @map("necessite_prescription")
+  produitCommercialise  Boolean?          @map("produit_commercialise")
+  groupeProduits        String?           @map("groupe_produits")
+  /// Statut de la fiche telle que recopiée. Distinct de `actifLocalement`,
+  /// qui dit si CETTE officine référence encore le produit.
+  actifCatalogue        Boolean?          @map("actif_catalogue")
+  refrigerationRequise  Boolean?          @map("refrigeration_requise")
+  conditionnement       String?
+  referenceLabo         String?           @map("reference_labo")
+
+  // --- Prix et fiscalité ---
+  pph                   Decimal? @db.Decimal(10, 2)
+  ppv                   Decimal? @db.Decimal(10, 2)
+  prixBaseRemboursement Decimal? @map("prix_base_remboursement") @db.Decimal(10, 2)
+  tvaAchat              Decimal? @map("tva_achat") @db.Decimal(5, 2)
+  tvaVente              Decimal? @map("tva_vente") @db.Decimal(5, 2)
+  remboursable          Boolean?
+  tauxRemboursement     Decimal? @map("taux_remboursement") @db.Decimal(5, 2)
+  /// Les cinq champs de rayon et de marque, recopies du catalogue comme le
+  /// reste. Ajoutes apres coup : la migration parapharmacie ne les avait
+  /// posees que sur `catalogue_produits`, laissant la copie incomplete.
+  marque                String?
+  categoriePrincipale   String?  @map("categorie_principale")
+  sousCategorie         String?  @map("sous_categorie")
+  sousSousCategorie     String?  @map("sous_sous_categorie")
+  etiquettes            String?
+  /// Prix de reference non reglemente de la parapharmacie, recopie du
+  /// catalogue au meme titre que le reste. Ajoute apres les 34 premieres
+  /// colonnes : les lignes deja recopiees le recuperent par la passe de
+  /// rattrapage du backfill, voir prisma/backfill-pharmacy-stock.ts.
+  prixVenteIndicatif    Decimal? @map("prix_vente_indicatif") @db.Decimal(10, 2)
+
+  // --- Descriptif ---
+  description                 String?
+  excipients                  String?
+  posologieAdulte             String? @map("posologie_adulte")
+  posologieEnfant             String? @map("posologie_enfant")
+  indications                 String?
+  contreIndicationConduite    String? @map("contre_indication_conduite")
+  contreIndicationAllaitement String? @map("contre_indication_allaitement")
+  contreIndicationGrossesse   String? @map("contre_indication_grossesse")
+  monographie                 String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy  Pharmacy         @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  /// Lien de traçabilité UNIQUEMENT : d'où vient cette fiche. Aucun code ne
+  /// doit lire identification, prix ou descriptif à travers lui — ces
+  /// valeurs vivent maintenant dans les colonnes ci-dessus.
+  catalogue CatalogueProduit @relation(fields: [catalogueProduitId], references: [id])
+  supplier  Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  lots      ProductLot[]
+
+  /// Une officine ne référence un produit catalogue qu'une fois — les
+  /// quantités multiples vivent dans les lots, pas dans des lignes en double.
+  @@unique([pharmacyId, catalogueProduitId])
+  @@index([pharmacyId])
+  @@index([catalogueProduitId])
+  @@map("pharmacy_stock")
+}
+
+/// Section 5.3 — une ligne par réception. La quantité totale d'un produit dans
+/// une officine est la somme des lots actifs : le PRD précise qu'elle est
+/// « dérivée, jamais saisie directement », d'où l'absence délibérée d'une
+/// colonne quantité sur PharmacyStock.
+model ProductLot {
+  id              String @id @default(uuid())
+  pharmacyStockId String @map("pharmacy_stock_id")
+
+  /// Lu au Datamatrix à la réception. Nul pour les lignes issues de la
+  /// migration : l'historique des lots réels n'existe pas avant celle-ci.
+  numeroLot      String?   @map("numero_lot")
+  quantite       Int       @default(0)
+  /// Propre au lot — base du tri FEFO et des alertes 90/60/30 jours.
+  datePeremption DateTime? @map("date_peremption")
+  dateReception  DateTime  @default(now()) @map("date_reception")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacyStock PharmacyStock @relation(fields: [pharmacyStockId], references: [id], onDelete: Cascade)
+
+  @@index([pharmacyStockId])
+  /// Le tri FEFO lit cet index.
+  @@index([datePeremption])
+  @@map("product_lots")
+}
+
+/// Journal d'audit, en ajout seul.
+///
+/// Créé ici pour la première fois : ce projet n'avait aucun mécanisme de
+/// journalisation, sous ce nom ni sous un autre — un TODO le constatait
+/// déjà dans lib/server/inventory.ts. Les modules suivants doivent
+/// réutiliser cette table plutôt que d'en ouvrir une seconde.
+model EventLog {
+  id String @id @default(uuid())
+
+  /// Qui a agi. Identifiant Supabase, volontairement SANS clé étrangère
+  /// vers `users` : un administrateur Akribis n'a pas de ligne là-bas, il
+  /// n'appartient à aucune pharmacie. Et l'e-mail est recopié plutôt que
+  /// joint, pour que le journal reste lisible même si le compte disparaît.
+  acteurId    String @map("acteur_id")
+  acteurEmail String @map("acteur_email")
+  acteurRole  String @map("acteur_role")
+
+  /// L'action précise, en vocabulaire pointé : `catalogue.produit.cree`.
+  typeAction String @map("type_action")
+
+  /// Sur quoi elle a porté. Table et identifiant en texte, sans relation :
+  /// un journal qui disparaîtrait avec ce qu'il décrit ne servirait à rien.
+  entite   String
+  entiteId String @map("entite_id")
+
+  /// Portée. Nulle pour une action nationale — l'Admin catalogue n'agit
+  /// pour aucune officine en particulier.
+  pharmacyId String? @map("pharmacy_id")
+
+  /// L'état avant et après, quand la notion a un sens. `avant` est nul à
+  /// la création, `apres` le serait à une suppression.
+  avant Json?
+  apres Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([typeAction, createdAt])
+  @@index([entite, entiteId])
+  @@index([acteurId, createdAt])
+  @@map("event_log")
+}
+
+/// Un organisme de tiers payant : CNSS/AMO, CNOPS, une mutuelle ou une
+/// assurance privée.
+///
+/// Propre à chaque officine — deux pharmacies peuvent conventionner avec
+/// des organismes différents, et négocier des taux différents avec le même.
+/// D'où `pharmacy_id` sur chaque ligne, et l'unicité du code qui vaut par
+/// officine et non globalement.
+model OrganismeTiersPayant {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+
+  nom  String
+  /// Le code par lequel l'organisme s'identifie sur les bordereaux.
+  code String
+
+  /// Part prise en charge par défaut, en pourcentage. Un point de départ :
+  /// le taux réel se décide vente par vente, un même organisme ne couvrant
+  /// pas un générique comme un princeps.
+  tauxCouverture Decimal @default(0) @map("taux_couverture") @db.Decimal(5, 2)
+
+  /// Format de bordereau attendu, en texte libre pour l'instant. À
+  /// structurer le jour où l'on générera les bordereaux pour de bon —
+  /// aujourd'hui c'est une note que l'officine se laisse à elle-même.
+  formatBordereau String? @map("format_bordereau")
+
+  /// Désactivé, jamais supprimé : des ventes passées le référencent, et
+  /// les faire disparaître fausserait la traçabilité qu'elles servent.
+  actif Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy   Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  ventes     Sale[]
+  bordereaux Bordereau[]
+  clients    Client[]
+
+  @@unique([pharmacyId, code])
+  @@index([pharmacyId, actif])
+  @@map("organismes_tiers_payant")
+}
+
+/// Le cycle de vie d'une créance de tiers payant.
+///
+/// `AUCUNE` pour une vente sans organisme — c'est la valeur par défaut, et
+/// celle de toutes les ventes antérieures au tiers payant.
+enum StatutCreance {
+  AUCUNE               @map("aucune")
+  EN_ATTENTE_BORDEREAU @map("en_attente_bordereau")
+  DANS_BORDEREAU       @map("dans_bordereau")
+  ACCEPTEE             @map("acceptee")
+  REJETEE              @map("rejetee")
+  PAYEE                @map("payee")
+
+  @@map("statut_creance")
+}
+
+/// Un bordereau de tiers payant : le récapitulatif adressé à un organisme
+/// pour se faire rembourser un lot de ventes.
+model Bordereau {
+  id         String @id @default(uuid())
+  pharmacyId String @map("pharmacy_id")
+  insurerId  String @map("insurer_id")
+
+  /// Numéro d'ordre de l'officine, ex. BOR-2026-0001.
+  numero String
+
+  /// La période couverte, bornes incluses.
+  periodeDebut DateTime @map("periode_debut") @db.Date
+  periodeFin   DateTime @map("periode_fin") @db.Date
+
+  statut StatutBordereau @default(BROUILLON)
+
+  /// Ce que l'organisme a réellement versé, saisi au rapprochement.
+  /// Nul tant qu'aucun paiement n'a été enregistré.
+  montantRecu       Decimal?  @map("montant_recu") @db.Decimal(10, 2)
+  dateRapprochement DateTime? @map("date_rapprochement")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pharmacy Pharmacy             @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  insurer  OrganismeTiersPayant @relation(fields: [insurerId], references: [id])
+  lignes   BordereauVente[]
+
+  @@unique([pharmacyId, numero])
+  @@index([pharmacyId, statut])
+  @@index([insurerId])
+  @@map("bordereaux")
+}
+
+/// Une vente dans un bordereau.
+model BordereauVente {
+  id          String @id @default(uuid())
+  bordereauId String @map("bordereau_id")
+  saleId      String @map("sale_id")
+
+  /// Le montant réclamé pour cette vente, figé à l'inclusion — la vente
+  /// peut être remboursée partiellement, ou son organisme changer de taux.
+  montantReclame Decimal @map("montant_reclame") @db.Decimal(10, 2)
+
+  statut     StatutLigneBordereau @default(EN_ATTENTE)
+  /// Pourquoi l'organisme a refusé. Texte libre, écrit par l'officine.
+  motifRejet String?              @map("motif_rejet")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  bordereau Bordereau @relation(fields: [bordereauId], references: [id], onDelete: Cascade)
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@unique([bordereauId, saleId])
+  @@index([saleId])
+  @@map("bordereau_ventes")
+}
+
+enum StatutBordereau {
+  BROUILLON     @map("brouillon")
+  ENVOYE        @map("envoye")
+  EN_TRAITEMENT @map("en_traitement")
+  CLOTURE       @map("cloture")
+
+  @@map("statut_bordereau")
+}
+
+enum StatutLigneBordereau {
+  EN_ATTENTE @map("en_attente")
+  ACCEPTEE   @map("acceptee")
+  REJETEE    @map("rejetee")
+
+  @@map("statut_ligne_bordereau")
 }

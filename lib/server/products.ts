@@ -20,7 +20,13 @@ export type ListProductsParams = {
   search?: string;
 };
 
-type DecimalField = "price" | "pph" | "tvaVente" | "tvaAchat" | "baseRemboursement";
+type DecimalField =
+  | "price"
+  | "purchasePrice"
+  | "pph"
+  | "tvaVente"
+  | "tvaAchat"
+  | "baseRemboursement";
 
 /**
  * Prisma's `Decimal` isn't a plain JSON value, so every Decimal column
@@ -30,20 +36,54 @@ type DecimalField = "price" | "pph" | "tvaVente" | "tvaAchat" | "baseRembourseme
  */
 export type ProductRecord = Omit<ProductModel, DecimalField> & {
   price: number;
+  purchasePrice: number | null;
   pph: number | null;
   tvaVente: number | null;
   tvaAchat: number | null;
   baseRemboursement: number | null;
+  /**
+   * La famille PRD de la fiche liée — c'est elle qui distingue un
+   * médicament d'un produit de parapharmacie dans la liste du stock.
+   *
+   * Lue sur `catalogue_produits` et non sur la copie `pharmacy_stock` de
+   * l'officine, parce qu'aucune interface officine ne permet de modifier
+   * cette colonne : les deux ne peuvent pas diverger aujourd'hui, et le
+   * lien `Product.catalogueProduitId` évite une requête de plus. Si la
+   * famille devient un jour modifiable localement, c'est `pharmacy_stock`
+   * qu'il faudra lire ici.
+   *
+   * `null` pour un produit saisi à la main, jamais rattaché au catalogue.
+   */
+  categorie: string | null;
+  sousCategorie: string | null;
 };
 
-function toProductRecord(product: ProductModel): ProductRecord {
+/** Le produit tel que le lisent les requêtes ci-dessous, fiche liée incluse. */
+type ProductWithCatalogue = ProductModel & {
+  catalogue?: { categorie: string | null; sousCategorie: string | null } | null;
+};
+
+/** Ce qu'il faut joindre pour que `categorie` soit renseignée. */
+const AVEC_CATALOGUE = {
+  catalogue: { select: { categorie: true, sousCategorie: true } },
+} as const;
+
+function toProductRecord(product: ProductWithCatalogue): ProductRecord {
+  // `catalogue` est retiré : l'objet part vers IndexedDB et vers des
+  // composants client, il ne doit contenir que des champs plats.
+  const { catalogue, ...rest } = product;
   return {
-    ...product,
+    ...rest,
     price: Number(product.price),
+    // Was missing from the conversion while nothing read it; a Decimal
+    // reaching a client component throws at the RSC boundary.
+    purchasePrice: product.purchasePrice !== null ? Number(product.purchasePrice) : null,
     pph: product.pph !== null ? Number(product.pph) : null,
     tvaVente: product.tvaVente !== null ? Number(product.tvaVente) : null,
     tvaAchat: product.tvaAchat !== null ? Number(product.tvaAchat) : null,
     baseRemboursement: product.baseRemboursement !== null ? Number(product.baseRemboursement) : null,
+    categorie: catalogue?.categorie ?? null,
+    sousCategorie: catalogue?.sousCategorie ?? null,
   };
 }
 
@@ -65,6 +105,7 @@ export async function listProducts(params: ListProductsParams = {}): Promise<Pro
         : {}),
     },
     orderBy: { name: "asc" },
+    include: AVEC_CATALOGUE,
   });
 
   return products.map(toProductRecord);
@@ -74,6 +115,7 @@ export async function getProduct(id: string): Promise<ProductRecord | null> {
   const user = await requireUser();
   const product = await prisma.product.findFirst({
     where: { id, pharmacyId: user.pharmacyId },
+    include: AVEC_CATALOGUE,
   });
   return product ? toProductRecord(product) : null;
 }
@@ -119,6 +161,7 @@ export async function createProduct(
       pharmacyId: user.pharmacyId,
       ...dataFromInput(data),
     },
+    include: AVEC_CATALOGUE,
   });
 
   revalidatePath("/dashboard/stock");
@@ -147,6 +190,7 @@ export async function updateProduct(
   const product = await prisma.product.update({
     where: { id },
     data: dataFromInput(data),
+    include: AVEC_CATALOGUE,
   });
 
   revalidatePath("/dashboard/stock");

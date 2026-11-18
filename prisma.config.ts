@@ -3,12 +3,22 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
+/**
+ * Les migrations passent par `DIRECT_URL` — le pooler Supabase en **mode
+ * session** (port 5432), qui donne une connexion serveur dédiée pour toute
+ * la session. Prisma Migrate en a besoin : il pose un verrou d'avis et
+ * enchaîne du DDL sur la même connexion, ce que le mode transaction
+ * (6543) ne garantit pas.
+ *
+ * L'application, elle, utilise `DATABASE_URL` en mode transaction. Voir
+ * lib/db/client.ts pour pourquoi les deux ne peuvent pas être le même port.
+ */
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

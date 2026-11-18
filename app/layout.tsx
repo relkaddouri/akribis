@@ -45,7 +45,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      {/* `suppressHydrationWarning` sur <body> uniquement.
+          Les extensions de navigateur écrivent leurs attributs sur <body>
+          avant que React n'hydrate — ColorZilla pose `cz-shortcut-listen`,
+          Grammarly `data-gr-*` — et React signale un écart que le code ne
+          peut ni prévoir ni corriger. C'est le remède recommandé par Next
+          pour ce cas précis.
+          Portée volontairement minimale : l'attribut ne couvre que les
+          attributs de <body> lui-même, jamais son contenu, donc un vrai
+          écart d'hydratation dans l'application continue d'être signalé. */}
       <body
+        suppressHydrationWarning
         className={`${inter.variable} ${manrope.variable} ${geistMono.variable} antialiased`}
       >
         {children}

@@ -6,6 +6,7 @@ import { DashboardUserProvider } from "@/components/providers/dashboard-user-pro
 import { DashboardSidebar } from "@/components/features/dashboard/dashboard-sidebar";
 import { SIDEBAR_COLLAPSED_COOKIE } from "@/components/features/dashboard/sidebar-cookie";
 import { OfflineBanner } from "@/components/features/offline/offline-banner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default async function DashboardLayout({
   children,
@@ -39,6 +40,13 @@ export default async function DashboardLayout({
               descendants (Tailwind's `sr-only` among them): without it they
               resolve against the document, escape the scroll port's
               clipping, and stretch the page so the whole shell scrolls. */}
+          {/* Monté ici, comme dans app/(admin)/layout.tsx : n'importe quelle
+              page du dashboard peut poser un Tooltip, et Radix lève si le
+              fournisseur manque. Il manquait, et la fiche produit plantait
+              dès qu'un produit avait une TVA à compléter — le seul Tooltip
+              du segment qui n'apparaisse que sous condition. La sidebar
+              monte le sien ; imbriquer les deux ne pose pas de problème. */}
+          <TooltipProvider delayDuration={200}>
           <div className="flex h-svh overflow-hidden print:block print:h-auto print:overflow-visible">
             {/* Gutter around the sidebar so it reads as a floating card,
                 like the header. `py-sp-lg pl-sp-lg` puts its top edge at the
@@ -52,6 +60,7 @@ export default async function DashboardLayout({
             </main>
             <OfflineBanner />
           </div>
+          </TooltipProvider>
         </DashboardUserProvider>
       </QueryProvider>
     </OfflineProvider>

@@ -13,6 +13,16 @@ export type CartLine = {
   quantity: number;
   /** Stock snapshot at the time the product was added/looked up. */
   availableStock: number;
+  /**
+   * De quoi partager la ligne avec un organisme de tiers payant.
+   *
+   * Optionnels : une ligne construite depuis un produit mis en cache avant
+   * le tiers payant ne les porte pas. Un statut inconnu ne donne droit à
+   * rien — même règle qu'une base absente, et le bon défaut : mieux vaut
+   * ne rien réclamer que réclamer à tort.
+   */
+  remboursable?: boolean;
+  baseRemboursement?: number | null;
 };
 
 export type CartProduct = {
@@ -20,6 +30,10 @@ export type CartProduct = {
   name: string;
   price: number;
   quantityInStock: number;
+  /** Optionnels : un produit du cache d'avant le tiers payant ne les porte
+   *  pas, et une ligne sans base ne donne droit à aucun remboursement. */
+  remboursable?: boolean;
+  baseRemboursement?: number | null;
 };
 
 export function round2(value: number): number {
@@ -79,6 +93,11 @@ export function addToCart(
         unitPrice: product.price,
         quantity: clampedQuantity,
         availableStock: product.quantityInStock,
+        // Sans cette recopie, toute ligne est « non remboursable » et le
+        // tiers payant devient inatteignable. Les champs étant optionnels
+        // sur CartProduct, leur oubli ne fait pas broncher `tsc`.
+        remboursable: product.remboursable ?? false,
+        baseRemboursement: product.baseRemboursement ?? null,
       },
     ],
     capped,

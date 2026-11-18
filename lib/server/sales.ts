@@ -31,10 +31,18 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/client";
 import { requireUser } from "@/lib/auth/session";
+import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
+import { formatSaleReference } from "@/lib/sales/returns";
+import { sessionEnRetard } from "@/lib/caisse/journal-z";
 import { createSaleSchema, type CreateSaleInput } from "@/lib/validations/sales";
 import { computeLoyaltyPoints, creditSaleMovement } from "@/lib/clients/account";
 import { addLoyaltyPoints, recordClientTransaction } from "@/lib/server/client-account";
 import type { PaymentMethod } from "@/lib/db/generated/enums";
+import {
+  calculerPartage,
+  partAssuranceLigne,
+  type LigneRemboursable,
+} from "@/lib/pos/tiers-payant";
 
 export type ReceiptLine = {
   productId: string;
@@ -67,16 +75,63 @@ export type Receipt = {
   clientName: string | null;
   items: ReceiptLine[];
   priceDrifts: PriceDrift[];
+  /** Le partage tiers payant. `partAssurance` vaut 0 sans organisme. */
+  partClient: number;
+  partAssurance: number;
 };
 
 export async function createSale(
   input: CreateSaleInput,
-  options?: { id?: string },
+  options?: {
+    id?: string;
+    /**
+     * Quand la vente a réellement eu lieu, pour une vente hors ligne
+     * rejouée plus tard. Absent sur une vente passée en direct.
+     */
+    occurredAt?: Date;
+  },
 ): Promise<Receipt> {
   const user = await requireUser();
   const parsed = createSaleSchema.parse(input);
 
   const receipt = await prisma.$transaction(async (tx) => {
+    /*
+     * Aucune vente sans caisse ouverte, quel que soit le mode de paiement.
+     * Une vente par carte ne touche pas le tiroir, mais elle entre dans le
+     * Z : la laisser passer hors session la rendrait invisible de la
+     * journée comptable.
+     *
+     * Le contrôle est ici, dans la transaction, et non seulement à
+     * l'écran : le point de vente hors ligne rejoue ses ventes par cette
+     * même fonction, sans jamais passer par l'écran de blocage.
+     */
+    const session = await tx.caisseSession.findFirst({
+      where: { pharmacyId: user.pharmacyId, statut: "OUVERTE" },
+      select: { id: true, dateOuverture: true },
+    });
+    if (!session) {
+      throw new Error("Caisse non ouverte. Saisissez le fond de caisse avant de vendre.");
+    }
+
+    const maintenant = new Date();
+    if (sessionEnRetard(session.dateOuverture, maintenant)) {
+      // Pas de cumul sur plusieurs jours : chaque journée a son propre Z.
+      const jour = session.dateOuverture.toLocaleDateString("fr-FR");
+      throw new Error(
+        `Une session du ${jour} n'a pas été clôturée. Fermez-la avant de continuer.`,
+      );
+    }
+
+    /*
+     * Rattrapage : la vente s'est produite un jour dont la session est
+     * déjà close. On ne rouvre jamais une session fermée — son Z est
+     * archivé et ses ventes sont figées en base. Elle rejoint donc la
+     * session courante, marquée pour que le Z du jour dise que ce montant
+     * n'est pas de sa journée.
+     */
+    const rattrapage =
+      options?.occurredAt !== undefined &&
+      sessionEnRetard(options.occurredAt, session.dateOuverture);
     // Tenant-scoped, same as products below: a tampered clientId from
     // another pharmacy must not be attachable to this sale.
     let client: { id: string; name: string } | null = null;
@@ -100,6 +155,10 @@ export async function createSale(
     const productById = new Map(products.map((product) => [product.id, product]));
 
     const items: ReceiptLine[] = [];
+
+    /** Les mêmes lignes, augmentées de quoi calculer la part assurance. */
+
+    const lignesPartage: LigneRemboursable[] = [];
     const priceDrifts: PriceDrift[] = [];
 
     for (const item of parsed.items) {
@@ -145,9 +204,101 @@ export async function createSale(
         unitPrice,
         lineTotal: unitPrice * item.quantity,
       });
+
+      // Le statut remboursable et la base viennent d'ICI, du produit tel
+      // que la base le connait — jamais du panier. Le prix, lui, reste
+      // celui du ticket : c'est la regle de tarification du haut de ce
+      // fichier, et elle ne concerne pas le droit au remboursement.
+      lignesPartage.push({
+        unitPrice,
+        quantity: item.quantity,
+        remboursable: product.remboursable,
+        baseRemboursement:
+          product.baseRemboursement !== null ? Number(product.baseRemboursement) : null,
+      });
     }
 
     const totalAmount = items.reduce((sum, item) => sum + item.lineTotal, 0);
+
+
+    // L'organisme est reverifie comme le client : son identifiant vient
+
+    // d'un formulaire, il designerait celui d'une autre officine — ou un
+
+    // organisme desactive — tout aussi bien.
+
+    const insurer = parsed.insurerId
+
+      ? await tx.organismeTiersPayant.findFirst({
+
+          where: { id: parsed.insurerId, pharmacyId: user.pharmacyId, actif: true },
+
+          select: { id: true, tauxCouverture: true },
+
+        })
+
+      : null;
+
+    if (parsed.insurerId && !insurer) {
+
+      throw new Error("Organisme de tiers payant inconnu ou desactive.");
+
+    }
+
+
+    const taux = insurer ? Number(insurer.tauxCouverture) : null;
+
+
+    const partage = calculerPartage(lignesPartage, taux);
+
+
+
+    /**
+
+
+     * Ce que chaque ligne réclame, par identifiant de produit.
+
+
+     *
+
+
+     * `items` et `lignesPartage` sont construits ensemble, dans le même
+
+
+     * ordre — un produit ne peut pas figurer deux fois, `parsed.items`
+
+
+     * étant dédupliqué par le panier.
+
+
+     */
+
+
+    const partageParLigne = new Map(
+
+
+      items.map((item, index) => [
+
+
+        item.productId,
+
+
+        {
+
+
+          base: lignesPartage[index]!.baseRemboursement ?? null,
+
+
+          part: partAssuranceLigne(lignesPartage[index]!, taux),
+
+
+        },
+
+
+      ]),
+
+
+    );
 
     const sale = await tx.sale.create({
       data: {
@@ -159,6 +310,14 @@ export async function createSale(
         clientId: client?.id ?? null,
         paymentMethod: parsed.paymentMethod,
         totalAmount,
+        insurerId: insurer?.id ?? null,
+        montantPartClient: partage.partClient,
+        montantPartAssurance: partage.partAssurance,
+        // Une part assurance nulle ne cree aucune creance, meme si un
+        // organisme a ete choisi : il n'y aurait rien a reclamer.
+        statutCreance: partage.partAssurance > 0 ? "EN_ATTENTE_BORDEREAU" : "AUCUNE",
+        caisseSessionId: session.id,
+        rattrapageOffline: rattrapage,
       },
     });
 
@@ -170,6 +329,11 @@ export async function createSale(
           productId: item.productId,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
+          // Figés ici : la base et la part réclamée pour CETTE ligne, à
+          // CE moment. Les relire plus tard sur le produit donnerait la
+          // valeur du jour, pas celle de la vente.
+          baseRemboursement: partageParLigne.get(item.productId)?.base ?? null,
+          montantPartAssurance: partageParLigne.get(item.productId)?.part ?? 0,
         },
       });
 
@@ -190,10 +354,22 @@ export async function createSale(
       // break the balance/history invariant that lib/server/client-account.ts
       // guarantees.
       if (parsed.paymentMethod === "CREDIT") {
+        /**
+         * La part client, et jamais le total.
+         *
+         * La part organisme est déjà partie en réclamation : `statutCreance`
+         * ci-dessus la met sur un bordereau, et c'est l'organisme qui la
+         * règle. La porter aussi au compte du client la ferait encaisser
+         * deux fois — et définitivement, car le règlement d'un bordereau
+         * (lib/server/bordereaux.ts) ne touche pas au compte client : il
+         * bascule `statutCreance` à PAYEE, sans écriture compensatoire.
+         *
+         * Sans organisme, `partClient` vaut le total et rien ne change.
+         */
         await recordClientTransaction(tx, user.pharmacyId, {
           clientId: client.id,
           type: "vente",
-          montant: creditSaleMovement(totalAmount),
+          montant: creditSaleMovement(partage.partClient),
           saleId: sale.id,
           description: "Vente à crédit",
         });
@@ -210,11 +386,35 @@ export async function createSale(
       );
     }
 
+    // Journalisation en fin de transaction : la vente est écrite, ses
+    // mouvements de stock aussi, et la trace part avec eux ou pas du tout.
+    // Elle n'entre dans aucun calcul au-dessus — c'est un ajout à côté de
+    // la logique de vente, jamais dedans.
+    await journaliser(tx, {
+      acteur: { id: user.id, email: user.email, role: user.role },
+      typeAction: TYPES_ACTION.venteCreee,
+      entite: ENTITES.vente,
+      entiteId: sale.id,
+      pharmacyId: user.pharmacyId,
+      // Pas d'« avant » : la vente n'existait pas. L'« après » retient ce
+      // qui se relit des mois plus tard sans rouvrir la fiche.
+      apres: {
+        nom: formatSaleReference(sale.id),
+        montant: totalAmount,
+        paiement: parsed.paymentMethod,
+        client: client?.name ?? null,
+        lignes: items.length,
+        ...(rattrapage ? { rattrapageOffline: true } : {}),
+      },
+    });
+
     return {
       id: sale.id,
       createdAt: sale.createdAt,
       paymentMethod: parsed.paymentMethod,
       totalAmount,
+      partClient: partage.partClient,
+      partAssurance: partage.partAssurance,
       clientName: client?.name ?? null,
       items,
       priceDrifts,

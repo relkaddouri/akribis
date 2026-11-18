@@ -60,7 +60,11 @@ export function NewOrderForm({ initialSupplierId = "" }: { initialSupplierId?: s
    * worth ordering, so the buyer starts from a proposal instead of a blank
    * field they have to guess at.
    */
-  const productsQuery = useQuery({ queryKey: ["products", {}], queryFn: () => listProducts() });
+  // On ne recommande pas un produit que l'officine a retiré de sa vente.
+  const productsQuery = useQuery({
+    queryKey: ["products", { actifsSeulement: true }],
+    queryFn: () => listProducts({ actifsSeulement: true }),
+  });
   const suggestions = useMemo(() => {
     const chosen = new Set(lines.map((line) => line.productId));
     return (productsQuery.data ?? [])

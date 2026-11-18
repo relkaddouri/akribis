@@ -17,7 +17,10 @@ export const pharmacyInfoSchema = z.object({
   address: optionalTrimmed(),
   phone: optionalTrimmed(),
   ice: optionalTrimmed(),
+  identifiantFiscal: optionalTrimmed(),
   orderNumber: optionalTrimmed(),
+  inpe: optionalTrimmed(),
+  patente: optionalTrimmed(),
 });
 
 export type PharmacyInfoInput = z.input<typeof pharmacyInfoSchema>;
@@ -45,3 +48,22 @@ export function parseReceiptSettings(value: unknown): ReceiptSettings {
   if (!parsed.success) return DEFAULT_RECEIPT_SETTINGS;
   return { ...DEFAULT_RECEIPT_SETTINGS, ...parsed.data };
 }
+
+/**
+ * Un organisme de tiers payant.
+ *
+ * Le taux est borné à 0–100 : c'est un pourcentage de prise en charge, et
+ * 150 % n'est pas une négociation avantageuse mais une faute de frappe qui
+ * fausserait chaque vente jusqu'à ce que quelqu'un s'en aperçoive.
+ */
+export const organismeSchema = z.object({
+  nom: z.string().trim().min(1, "Nom requis"),
+  code: z.string().trim().min(1, "Code requis"),
+  tauxCouverture: z.coerce
+    .number({ message: "Taux invalide" })
+    .min(0, "Le taux ne peut pas être négatif")
+    .max(100, "Le taux ne peut pas dépasser 100 %"),
+  formatBordereau: optionalTrimmed(),
+});
+
+export type OrganismeInput = z.input<typeof organismeSchema>;

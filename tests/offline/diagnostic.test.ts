@@ -145,6 +145,22 @@ vi.mock("@/lib/server/orders", () => ({
   }),
 }));
 
+// The sync engine's inventory hydration runs on every pass; without this
+// it would reach the real Prisma-backed action.
+vi.mock("@/lib/server/inventory", () => ({
+  startInventorySession: vi.fn(),
+  recordInventoryCount: vi.fn(),
+  applyInventoryAdjustments: vi.fn(),
+  listInventorySessions: vi.fn(async () => {
+    guard();
+    return [];
+  }),
+  listInventorySessionCounts: vi.fn(async () => {
+    guard();
+    return [];
+  }),
+}));
+
 vi.mock("@/lib/server/clients", () => ({
   addClient: vi.fn(async (input: { name: string }) => {
     guard();

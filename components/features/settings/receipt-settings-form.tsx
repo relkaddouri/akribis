@@ -26,6 +26,11 @@ const SAMPLE_RECEIPT: Receipt = {
     { productId: "2", productName: "Amoxicilline 500mg", quantity: 1, unitPrice: 32, lineTotal: 32 },
   ],
   priceDrifts: [],
+  // Aperçu du ticket : pas de tiers payant sur l'exemple, donc tout est à
+  // la charge du client — l'invariant part client + part assurance = total
+  // vaut aussi pour une donnée de démonstration.
+  partClient: 78.5,
+  partAssurance: 0,
 };
 
 export function ReceiptSettingsForm({
@@ -118,6 +123,8 @@ export function ReceiptSettingsForm({
               address: pharmacy.address,
               phone: pharmacy.phone,
               ice: pharmacy.ice,
+              inpe: null,
+              patente: null,
               logoUrl: pharmacy.logoUrl,
               showLogo,
               legalNotice: legalNotice.trim() || null,
