@@ -53,3 +53,17 @@ export function getPharmacyIdFromUser(user: Pick<User, "app_metadata"> | null): 
   const pharmacyId = user?.app_metadata?.pharmacy_id;
   return typeof pharmacyId === "string" && pharmacyId.length > 0 ? pharmacyId : null;
 }
+
+/**
+ * The role the app can actually act on. A pharmacy role without the
+ * `pharmacy_id` it scopes every query by is as good as no role: such an
+ * account would be let into /dashboard by the middleware, then sent back
+ * to /login by `requireUser()`, and from there to /dashboard again.
+ */
+export function getEffectiveRoleFromUser(
+  user: Pick<User, "app_metadata"> | null,
+): Role | null {
+  const role = getSessionRoleFromUser(user);
+  if (isPharmacyRole(role) && !getPharmacyIdFromUser(user)) return null;
+  return role;
+}

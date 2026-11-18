@@ -20,6 +20,9 @@ const state = vi.hoisted(() => ({
   /** Simule une base de journal indisponible. */
   journalEnPanne: false,
   echecConnexion: false,
+  /** Remplace l'utilisateur renvoyé par signInWithPassword. */
+  utilisateurAuthentifie: null as Record<string, unknown> | null,
+  deconnexions: 0,
   utilisateursCrees: [] as Record<string, unknown>[],
 }));
 
@@ -59,9 +62,10 @@ vi.mock("@/lib/supabase/server", () => ({
       signInWithPassword: async () =>
         state.echecConnexion
           ? { data: { user: null }, error: { message: "Invalid login credentials" } }
-          : { data: { user: UTILISATEUR_SUPABASE }, error: null },
+          : { data: { user: state.utilisateurAuthentifie ?? UTILISATEUR_SUPABASE }, error: null },
       getUser: async () => ({ data: { user: state.utilisateurConnecte } }),
       signOut: async () => {
+        state.deconnexions += 1;
         state.utilisateurConnecte = null;
         return { error: null };
       },
@@ -122,6 +126,8 @@ beforeEach(() => {
   state.utilisateurConnecte = UTILISATEUR_SUPABASE;
   state.journalEnPanne = false;
   state.echecConnexion = false;
+  state.utilisateurAuthentifie = null;
+  state.deconnexions = 0;
   state.utilisateursCrees = [];
 });
 
@@ -154,6 +160,31 @@ describe("connexion", () => {
 
     expect(resultat.error).toBe("Identifiants incorrects");
     expect(state.journal).toHaveLength(0);
+  });
+
+  it("refuse un compte sans rôle : session fermée, message, aucune redirection", async () => {
+    // Un compte créé avec « Add user » dans le dashboard Supabase. Le
+    // rediriger vers /dashboard partait en boucle infinie.
+    state.utilisateurAuthentifie = {
+      id: "auth-2",
+      email: "sans-role@akribis.test",
+      app_metadata: {},
+    };
+
+    const resultat = await signInAction(
+      {},
+      champs({ email: "sans-role@akribis.test", password: "motdepasse1" }),
+    );
+
+    expect(resultat.error).toBe(
+      "Ce compte n'a pas d'accès configuré. Contactez l'administrateur Akribis.",
+    );
+    expect(state.redirections).toEqual([]);
+    expect(state.deconnexions).toBe(1);
+    expect(state.journal).toHaveLength(1);
+    expect(derniere().typeAction).toBe("utilisateur.connexion");
+    expect(derniere().acteurId).toBe("auth-2");
+    expect(derniere().acteurRole).toBe("?");
   });
 
   it("laisse entrer même si le journal est indisponible", async () => {

@@ -28,6 +28,16 @@ export const FORGOT_PASSWORD_PATH = "/mot-de-passe-oublie";
 export const RESET_PASSWORD_PATH = "/reinitialiser-mot-de-passe";
 
 /**
+ * Valeur du paramètre `raison` de /login pour un compte connecté qui n'a
+ * aucun rôle exploitable — typiquement créé avec « Add user » dans le
+ * dashboard Supabase, sans `app_metadata.role`.
+ */
+export const NO_ROLE_REASON = "sans-role";
+export const NO_ROLE_LOGIN_PATH = `${LOGIN_PATH}?raison=${NO_ROLE_REASON}`;
+export const NO_ROLE_MESSAGE =
+  "Ce compte n'a pas d'accès configuré. Contactez l'administrateur Akribis.";
+
+/**
  * Route prefixes that require a signed-in session. The actualités feed is
  * readable by owner and assistant alike, so it's protected but not
  * owner-only.
@@ -107,7 +117,13 @@ export function defaultPathForRole(role: Role | null): string {
 /**
  * Pure decision function used by the middleware (and directly by tests):
  * given the current request path and session, returns the path to
- * redirect to, or null if the request should proceed as-is.
+ * redirect to (possibly with a query string), or null if the request
+ * should proceed as-is.
+ *
+ * A signed-in account with no role has no home: `defaultPathForRole(null)`
+ * is /dashboard, which it cannot enter. Sending it there from /dashboard,
+ * or bouncing it off /login, looped until the browser gave up. It is
+ * sent to /login with an explanation instead, and allowed to stay there.
  */
 export function resolveAuthRedirect(params: {
   pathname: string;
@@ -118,6 +134,7 @@ export function resolveAuthRedirect(params: {
 
   if (isProtectedPath(pathname)) {
     if (!isAuthenticated) return LOGIN_PATH;
+    if (!role) return NO_ROLE_LOGIN_PATH;
     if (canAccess(role, pathname)) return null;
     // Sending them to their own space rather than a 403 page: a pharmacist
     // who lands on /admin has followed a stale link, and an admin who
@@ -125,7 +142,7 @@ export function resolveAuthRedirect(params: {
     return defaultPathForRole(role);
   }
 
-  if ((GUEST_ONLY_PATHS as readonly string[]).includes(pathname) && isAuthenticated) {
+  if ((GUEST_ONLY_PATHS as readonly string[]).includes(pathname) && isAuthenticated && role) {
     return defaultPathForRole(role);
   }
 

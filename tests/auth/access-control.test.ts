@@ -141,3 +141,41 @@ describe("inventory routes", () => {
     expect(isOwnerOnlyPath("/inventaire")).toBe(false);
   });
 });
+
+describe("a signed-in account with no role", () => {
+  /**
+   * An account created with « Add user » in the Supabase dashboard has no
+   * `app_metadata.role`. It used to be sent from /dashboard to
+   * defaultPathForRole(null) — /dashboard again — until the browser gave
+   * up with "redirect count exceeded".
+   */
+  const noRole = (pathname: string) =>
+    resolveAuthRedirect({ pathname, isAuthenticated: true, role: null });
+
+  it("is sent from /dashboard to /login with an explanation", () => {
+    expect(noRole("/dashboard")).toBe("/login?raison=sans-role");
+  });
+
+  it("is sent from the back-office to /login with an explanation", () => {
+    expect(noRole("/admin/catalogue")).toBe("/login?raison=sans-role");
+  });
+
+  it("is allowed to stay on /login and /inscription", () => {
+    expect(noRole("/login")).toBeNull();
+    expect(noRole("/inscription")).toBeNull();
+  });
+
+  it("is never redirected back to the page it asked for, nor in a cycle", () => {
+    for (const start of ["/dashboard", "/dashboard/stats", "/parametres", "/admin", "/admin/catalogue", "/login", "/inscription"]) {
+      const visited = new Set<string>();
+      let pathname: string | null = start;
+      while (pathname) {
+        expect(visited.has(pathname), `boucle via ${pathname} depuis ${start}`).toBe(false);
+        visited.add(pathname);
+        const next = noRole(pathname);
+        pathname = next ? new URL(next, "http://x").pathname : null;
+      }
+      expect(visited.size).toBeLessThanOrEqual(2);
+    }
+  });
+});

@@ -11,10 +11,15 @@ import { requireOwner } from "@/lib/auth/session";
 import {
   DEFAULT_AUTHENTICATED_PATH,
   LOGIN_PATH,
+  NO_ROLE_MESSAGE,
   RESET_PASSWORD_PATH,
   defaultPathForRole,
 } from "@/lib/auth/access-control";
-import { getPharmacyIdFromUser, getSessionRoleFromUser } from "@/lib/auth/roles";
+import {
+  getEffectiveRoleFromUser,
+  getPharmacyIdFromUser,
+  getSessionRoleFromUser,
+} from "@/lib/auth/roles";
 import { ENTITES, journaliser, TYPES_ACTION } from "@/lib/audit/event-log";
 import { isRateLimited } from "@/lib/auth/rate-limit";
 import {
@@ -90,13 +95,21 @@ export async function signInAction(
     return { error: "Identifiants incorrects" };
   }
 
-  const role = getSessionRoleFromUser(data.user);
+  const role = getEffectiveRoleFromUser(data.user);
   // Avant le `redirect()`, qui lève : rien ne s'exécute après lui.
   await journaliserCompte({
     typeAction: TYPES_ACTION.utilisateurConnexion,
     acteur: { id: data.user.id, email: data.user.email ?? parsed.data.email, role: role ?? "?" },
     pharmacyId: getPharmacyIdFromUser(data.user),
   });
+
+  if (!role) {
+    // Compte sans rôle (créé avec « Add user » dans le dashboard Supabase,
+    // par exemple) : il n'a nulle part où aller. Le rediriger vers
+    // /dashboard partait en boucle ; on ferme la session et on explique.
+    await supabase.auth.signOut();
+    return { error: NO_ROLE_MESSAGE };
+  }
 
   // Akribis staff have no pharmacy dashboard. The middleware would bounce
   // them anyway, but sending them straight to the back-office spares a
