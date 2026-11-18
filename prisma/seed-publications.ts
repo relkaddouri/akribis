@@ -26,6 +26,9 @@
 
 import "dotenv/config";
 import { Client } from "pg";
+// Explicit .ts extension: this file runs on plain Node, which resolves ESM
+// strictly and will not guess it.
+import { assertSafeSeedTarget } from "./seed-guard.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -179,11 +182,13 @@ async function main() {
     return;
   }
 
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("DATABASE_URL est absent — vérifiez votre fichier .env.");
-  }
+  // Before opening a connection, never after: the point is to refuse a
+  // write to an unlabelled or production database, not to report it once
+  // the rows are already gone. `--dry-run` above returns earlier still —
+  // printing what would be written touches nothing.
+  assertSafeSeedTarget();
 
+  const connectionString = process.env.DATABASE_URL!;
   const client = new Client({ connectionString });
   await client.connect();
 
